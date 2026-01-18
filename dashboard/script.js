@@ -23,10 +23,14 @@ ws.onmessage = (event) => {
 
   const { latitude, longitude, emergency, risk, context } = data;
 
-  const color =
-    risk === "critical" ? "red" :
-    risk === "elevated" ? "orange" :
-    "green";
+  let color = "green";
+
+  if (emergency) {
+    color = "red";
+  } else if (risk === "elevated") {
+    color = "orange";
+  }
+
 
   statusBox.innerHTML = `
     <b>Device:</b> ${data.device_id}<br/>

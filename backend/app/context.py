@@ -15,9 +15,10 @@ def detect_speed_anomaly(prev_speed: float, curr_speed: float) -> bool:
 
 
 def calculate_risk(emergency: bool, anomaly: bool) -> str:
-    if emergency and anomaly:
+    if emergency:
         return "critical"
-    elif emergency or anomaly:
+    elif anomaly:
         return "elevated"
     else:
         return "normal"
+
