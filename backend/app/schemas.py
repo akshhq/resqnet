@@ -10,3 +10,4 @@ class DeviceUpdate(BaseModel):
     speed: float  # m/s
     battery: int  # %
     emergency: bool
+    reset: bool = False

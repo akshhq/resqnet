@@ -20,16 +20,31 @@ ws.onmessage = (event) => {
   console.log("WS DATA RECEIVED", event.data);
 
   const data = JSON.parse(event.data);
+  
+  if (data.alert) {
+  alert(`🚨 ALERT!\nDevice: ${data.device_id}\nRisk: ${data.risk}`);
+}
+  if (data.escalation) {
+  alert(`🚨 ESCALATION: ${data.escalation.toUpperCase()}`);
+}
 
   const { latitude, longitude, emergency, risk, context } = data;
 
   let color = "green";
 
-  if (emergency) {
-    color = "red";
-  } else if (risk === "elevated") {
-    color = "orange";
-  }
+// Panic has highest priority (visual urgency)
+if (data.emergency === true) {
+  color = "red";
+}
+// Elevated risk without panic
+else if (data.risk === "elevated") {
+  color = "orange";
+}
+// Critical risk without explicit panic (edge case)
+else if (data.risk === "critical") {
+  color = "red";
+}
+
 
 
   statusBox.innerHTML = `
@@ -51,7 +66,11 @@ ws.onmessage = (event) => {
     }).addTo(map);
   } else {
     marker.setLatLng([latitude, longitude]);
-    marker.setStyle({ color, fillColor: color });
+    marker.setStyle({
+  color: color,
+  fillColor: color
+});
+
   }
 
   map.setView([latitude, longitude], map.getZoom());
