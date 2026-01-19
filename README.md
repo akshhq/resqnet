@@ -1,167 +1,245 @@
-# ResQNet
+# ResQNet – Response & Rescue Network
 
-**ResQNet** (Response & Rescue Network) is a context-aware emergency alert system designed to provide fast, reliable, and independent emergency signaling using a combination of wearable-device triggers, motion context, and real-time tracking.
+## Overview
 
-Unlike app-only SOS solutions that fail when a phone is lost, locked, or out of battery, ResQNet is built on a **fail-safe architecture** that can operate independently while still integrating with a smartphone when available.
+**ResQNet (Response & Rescue Network)** is a context-aware emergency response system designed to provide **fast, reliable distress alerts with real-time situational awareness**. Unlike app-only SOS solutions, ResQNet is designed with a *device-first mindset* and continues to function even when a smartphone is unavailable, inaccessible, or compromised.
 
----
+The system combines:
 
-## 🧠 Problem Statement
+* A simulated wearable/device trigger
+* Intelligent movement & risk analysis
+* Time-based alert escalation
+* A live monitoring dashboard for trusted observers
 
-In emergency situations (assaults, accidents, medical distress, abduction risks), existing safety solutions face critical limitations:
-
-* Dependence on smartphones (phone snatched, battery dead, no time to unlock)
-* False triggers with no context
-* Lack of real-time situational awareness for emergency contacts
-* No clear indication of *what is happening* (walking, running, in a vehicle, stationary)
-
-As a result, emergency contacts receive alerts without enough information to respond effectively.
+ResQNet is built as a **software-first prototype**, making it ideal for academic projects, hackathons, and research demonstrations.
 
 ---
 
-## 🎯 Objective
+## Problem Statement
 
-ResQNet aims to build an **intelligent emergency response system** that:
+In real-world emergency situations (assault, abduction risk, medical distress, accidents):
+
+* Phones may be lost, locked, snatched, or out of battery
+* Existing SOS systems often send only location, without context
+* Emergency contacts lack real-time visibility into what is happening
+* False triggers and alert spam reduce trust
+
+These limitations lead to **delayed or ineffective responses** during critical moments.
+
+---
+
+## Objective
+
+ResQNet aims to build a **fail-safe, intelligent emergency response system** that:
 
 * Can be triggered quickly under stress
-* Works even when the user’s phone is unavailable
+* Locks emergency state to prevent forced cancellation
+* Allows only explicit, controlled reset
 * Shares live location and motion context
-* Provides continuous, real-time updates to trusted contacts
-* Minimizes false alerts while maximizing reliability
+* Escalates alerts if danger persists
+* Provides real-time monitoring via a dashboard
 
 ---
 
-## 🔑 Core Concept
-
-ResQNet is centered around three layers:
+## System Architecture
 
 ```
-[ Wearable / Device ]  →  [ ResQNet Backend ]  →  [ Web / App Dashboard ]
+[ Device / Simulator ]
+        ↓
+[ FastAPI Backend ]
+        ↓ (WebSocket)
+[ Live Web Dashboard ]
 ```
 
 ### Core Flow
 
 ```
-Distress Trigger → Emergency Mode ON →
-Live Location + Speed + Context Sent →
-Backend Processing →
-Emergency Contacts View Live Status
+Panic Trigger → Emergency Locked
+        ↓
+Context + Speed + Location Analysis
+        ↓
+Risk & Alert Evaluation
+        ↓
+Time-based Escalation (30s / 90s)
+        ↓
+Live Broadcast to Dashboard
 ```
 
 ---
 
-## 🚨 Key Features (Planned)
+## Key Features
 
-### 1. Manual Emergency Trigger
+### 1. Emergency Trigger & Lock
 
-* Multi-press button activation (e.g., 5–10 rapid presses)
-* Designed to prevent accidental activation
-* Usable under high stress
+* Panic trigger activates emergency mode
+* Emergency state is **latched** (cannot be auto-cancelled)
+* Reset requires an **explicit reset signal**
 
 ### 2. Context-Aware Tracking
 
-* Live GPS location updates
-* Speed-based context detection:
+* Live GPS location
+* Speed-based context classification:
 
   * Stationary
   * Walking
   * Running
-  * Vehicle movement
-* Sudden speed or motion spikes flagged as high-risk context
+  * Vehicle
+* Sudden speed anomalies flagged as high-risk
 
-### 3. Phone-Linked but Not Phone-Dependent
+### 3. Risk Assessment
 
-* Bluetooth connection to smartphone when available
-* Automatic fallback to independent connectivity (cellular/GPS)
-* Emergency mode does not rely on phone availability
+* Combines emergency intent and anomalies
+* Risk levels:
 
-### 4. Real-Time Monitoring Dashboard
+  * Normal
+  * Elevated
+  * Critical
 
-* Live map view of user location
-* Movement status indicators
-* Emergency state visibility
+### 4. Alert System
+
+* Alerts triggered on risk escalation
+* Cooldown prevents alert spam
+* Console + dashboard alerts (prototype stage)
+
+### 5. Time-Based Escalation
+
+* Emergency persistence escalates severity:
+
+  * After 30 seconds → Escalated
+  * After 90 seconds → Critical
+* Escalation resets automatically on panic reset
+
+### 6. Real-Time Dashboard
+
+* Live map visualization (Leaflet)
+* Marker color reflects state:
+
+  * Green → Normal
+  * Red → Emergency
 * Timeline of events
+* Replay of movement history
 
-### 5. Expandable Architecture (Future)
+### 7. Device Simulator
 
-* Audio and/or video capture during emergencies
-* Fall detection
-* Battery and device health monitoring
-* Secure evidence logging
+* Software-based wearable simulation
+* Auto movement updates every second
+* Modes: walking, running, vehicle
+* Keyboard controls:
 
----
-
-## 🧪 Development Approach
-
-ResQNet follows a **software-first, hardware-later** strategy:
-
-1. Simulate the wearable device using software
-2. Build and validate backend logic
-3. Develop live monitoring dashboard
-4. Introduce physical hardware incrementally
-
-This approach allows rapid iteration and validation before committing to hardware complexity.
+  * `p` → Panic
+  * `r` → Reset
+  * `1/2/3` → Movement modes
 
 ---
 
-## 🛠️ Tech Stack (Tentative)
+## Tech Stack
 
 ### Backend
 
-* Python (FastAPI / Flask)
-* WebSockets for live updates
-* SQLite / MongoDB (early-stage)
+* Python
+* FastAPI
+* WebSockets
+* In-memory state management (prototype)
 
 ### Frontend
 
-* Web dashboard (HTML/CSS/JS or React)
-* Map integration (Leaflet / Google Maps)
+* HTML / JavaScript
+* Leaflet.js for maps
+* WebSocket client
 
-### Device (Later Stage)
+### Simulator
 
-* ESP32 microcontroller
-* GPS module
-* Physical panic button
-* Accelerometer / motion sensors
-
----
-
-## 📌 Current Status
-
-* Project conceptualized
-* System architecture defined
-* Development starting with:
-
-  * Device simulator
-  * Backend API
-  * Emergency logic
+* Python
+* Requests
+* Multi-threaded input & send loops
 
 ---
 
-## 🧭 Roadmap (High-Level)
+## How to Run
 
-1. Device Simulator (virtual wearable)
-2. Backend emergency processing
-3. Context classification logic
-4. Live web dashboard
-5. Hardware trigger integration
-6. Advanced sensing & optimization
+### 1. Backend
+
+```bash
+cd backend
+venv\Scripts\activate
+python -m uvicorn app.main:app
+```
+
+### 2. Dashboard
+
+```bash
+cd dashboard
+python -m http.server 5500
+```
+
+Open: `http://localhost:5500/index.html`
+
+### 3. Simulator
+
+```bash
+cd simulator
+python simulator.py
+```
 
 ---
 
-## ⚠️ Disclaimer
+## Demo Flow
 
-ResQNet is a **research and prototype project**. It is not intended to replace official emergency services. All emergency alerts are directed only to trusted contacts defined by the user.
+1. Start backend, dashboard, simulator
+2. Device starts in **normal (green)** state
+3. Press `p` → emergency triggers → marker turns **red**
+4. Wait 30s → escalation alert
+5. Wait 90s → critical escalation
+6. Press `r` → emergency reset → marker returns **green**
 
 ---
 
-## 👤 Author
+## Design Principles
 
-Developed by **Aksh Kumar**
+* **Backend is the single source of truth**
+* **Emergency is latched** to prevent malicious cancellation
+* **Reset is explicit and authoritative**
+* **Escalation is event-driven**, not timer-based
+* **Frontend is stateless**, reflects latest backend state only
+
+---
+
+## Current Status
+
+* Fully functional prototype
+* Stable cold start
+* End-to-end tested with simulator
+
+---
+
+## Future Enhancements
+
+* Persistent storage (SQLite / MongoDB)
+* SMS / Email / Push notifications
+* Sound & visual alert enhancements
+* Multi-device & trusted contacts
+* Hardware integration (ESP32 + GPS + button)
+
+---
+
+## Intended Use
+
+* Academic projects
+* Hackathons
+* System design demonstrations
+* Research prototyping
+
+**ResQNet is not intended to replace official emergency services.**
+
+---
+
+## Author
+
+**Aksh Kumar**
 Undergraduate Computer Science Student
 
 ---
 
-## 📄 License
+## License
 
-This project is currently under development. Licensing details will be added as the project matures.
+MIT (or specify if different)
