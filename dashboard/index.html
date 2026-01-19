@@ -45,8 +45,29 @@
       overflow-y: auto;
       font-size: 13px;
     }
+      #toast {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    background: #111;
+    color: #fff;
+    padding: 12px 16px;
+    border-radius: 6px;
+    opacity: 0;
+    transition: opacity 0.4s;
+    z-index: 2000;
+    font-size: 14px;
+  }
+
+  #toast.show {
+    opacity: 1;
+  }
+
   </style>
 </head>
+
+<div id="toast"></div>
+
 
 <body>
 

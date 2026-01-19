@@ -10,6 +10,8 @@ L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
 
 let marker = null;
 
+let blinkInterval = null;
+
 const ws = new WebSocket("ws://localhost:8000/ws/live");
 
 ws.onopen = () => {
@@ -20,12 +22,25 @@ ws.onmessage = (event) => {
   console.log("WS DATA RECEIVED", event.data);
 
   const data = JSON.parse(event.data);
+
+  const statusEl = document.getElementById("status");
+
+  if (data.emergency) {
+    statusEl.textContent = `🚨 EMERGENCY (${data.risk.toUpperCase()})`;
+  } else {
+    statusEl.textContent = `✅ NORMAL (${data.context})`;
+  }
+
+  if (data.escalation) {
+    statusEl.textContent += " | ESCALATED";
+  }
+
   
   if (data.alert) {
-  alert(`🚨 ALERT!\nDevice: ${data.device_id}\nRisk: ${data.risk}`);
+  showToast(`🚨 ALERT: ${data.risk.toUpperCase()}`);
 }
   if (data.escalation) {
-  alert(`🚨 ESCALATION: ${data.escalation.toUpperCase()}`);
+  showToast(`🚨 ESCALATION: ${data.escalation.toUpperCase()}`);
 }
 
   const { latitude, longitude, emergency, risk, context } = data;
@@ -45,6 +60,20 @@ else if (data.risk === "critical") {
   color = "red";
 }
 
+  if (data.emergency) {
+  if (!blinkInterval) {
+    blinkInterval = setInterval(() => {
+      marker.setStyle({ fillOpacity: marker.options.fillOpacity === 0.8 ? 0.2 : 0.8 });
+    }, 500);
+  }
+  } 
+  else {
+    if (blinkInterval) {
+      clearInterval(blinkInterval);
+      blinkInterval = null;
+      marker.setStyle({ fillOpacity: 0.8 });
+    }
+  }
 
 
   statusBox.innerHTML = `
@@ -88,4 +117,14 @@ async function replay(deviceId) {
     ws.onmessage({ data: JSON.stringify(point) });
     await new Promise(r => setTimeout(r, 1000));
   }
+}
+
+function showToast(message) {
+  const toast = document.getElementById("toast");
+  toast.textContent = message;
+  toast.classList.add("show");
+
+  setTimeout(() => {
+    toast.classList.remove("show");
+  }, 3000);
 }
