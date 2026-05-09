@@ -22,6 +22,7 @@ def calculate_risk(emergency: bool, anomaly: bool) -> str:
     else:
         return "normal"
 
+
 ALERT_COOLDOWN = 30  # seconds
 
 
@@ -39,9 +40,10 @@ def should_alert(device_id: str, risk: str, timestamp: int, alert_state: dict) -
 
     return False
 
+
 ESCALATION_STEPS = [
-    (30, "escalated"),     # after 30s
-    (90, "critical")      # after 90s
+    (30, "escalated"),   # after 30s
+    (90, "critical")     # after 90s
 ]
 
 
@@ -66,6 +68,12 @@ def check_escalation(
 
     elapsed = timestamp - state["start"]
 
+    # NOTE: The loop fires at most ONE level per call (returns on first match).
+    # This means if updates arrive infrequently and elapsed jumps past multiple
+    # thresholds in one step, intermediate levels still fire — just on
+    # consecutive calls rather than simultaneously. For a 1 Hz simulator this
+    # is fine. If update frequency could be very low, consider advancing all
+    # pending levels in one pass instead.
     for i, (threshold, label) in enumerate(ESCALATION_STEPS):
         if elapsed >= threshold and state["level"] < i + 1:
             state["level"] = i + 1

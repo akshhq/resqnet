@@ -4,29 +4,20 @@ import threading
 import random
 import sys
 
-# ----------------------------
-# CONFIG
-# ----------------------------
 BACKEND_URL = "http://127.0.0.1:8000/device/update"
 DEVICE_ID = "SIM_DEVICE_01"
 
-# ----------------------------
-# GLOBAL STATE (AUTHORITATIVE)
-# ----------------------------
 latitude = 28.6139
 longitude = 77.2090
 
 battery = 100
-mode = "walking"          # walking | running | vehicle
+mode = "walking"
 emergency = False
 reset = False
 
 lock = threading.Lock()
 
 
-# ----------------------------
-# MOVEMENT + SPEED
-# ----------------------------
 def get_speed():
     if mode == "walking":
         return random.uniform(0.8, 1.4)
@@ -43,9 +34,6 @@ def move():
     longitude += random.uniform(0.00005, 0.0002)
 
 
-# ----------------------------
-# SEND LOOP (ONE CYCLE = ONE SEND)
-# ----------------------------
 def send_loop():
     global battery, reset
 
@@ -71,7 +59,6 @@ def send_loop():
         except Exception as e:
             print("Send failed:", e)
 
-        # 🔑 reset is a ONE-SHOT signal
         with lock:
             reset = False
 
@@ -79,9 +66,25 @@ def send_loop():
         time.sleep(1)
 
 
-# ----------------------------
-# INPUT LOOP (USER CONTROLS)
-# ----------------------------
+# FIX #6: Single-keypress input — no Enter required.
+# Uses tty/termios on Unix/macOS, msvcrt on Windows.
+def read_key():
+    """Read a single character without waiting for Enter."""
+    if sys.platform == "win32":
+        import msvcrt
+        return msvcrt.getwch()
+    else:
+        import tty
+        import termios
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            return sys.stdin.read(1)
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+
 def input_loop():
     global emergency, mode, reset
 
@@ -94,7 +97,7 @@ def input_loop():
     print("q  → quit\n")
 
     while True:
-        key = sys.stdin.read(1)
+        key = read_key()
 
         with lock:
             if key == "p":
@@ -124,9 +127,6 @@ def input_loop():
                 sys.exit(0)
 
 
-# ----------------------------
-# ENTRY POINT
-# ----------------------------
 if __name__ == "__main__":
     print("Starting ResQNet Device Simulator")
     threading.Thread(target=send_loop, daemon=True).start()

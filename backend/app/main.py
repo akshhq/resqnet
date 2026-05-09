@@ -1,3 +1,6 @@
+import os
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -17,29 +20,34 @@ from app.context import (
 )
 from app.websocket import ConnectionManager
 
-app = FastAPI(title="ResQNet Backend", version="0.4")
 
-# ----------------------------
-# CLEAR ALL RUNTIME STATE
-# ----------------------------
-@app.on_event("startup")
-def clear_runtime_state():
+# FIX #7: lifespan replaces the deprecated @app.on_event("startup")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     device_state.clear()
     device_history.clear()
     alert_state.clear()
     escalation_state.clear()
     print("🔄 Runtime state cleared")
+    yield
+    # (teardown logic can go here if needed in future)
 
 
-# ----------------------------
-# CORS
-# ----------------------------
+app = FastAPI(title="ResQNet Backend", version="0.4", lifespan=lifespan)
+
+
+# FIX #12: CORS origins read from environment variable so they're easy to
+# change across dev / staging / production without touching source code.
+# Default covers local dev with Live Server.
+_raw_origins = os.getenv(
+    "CORS_ORIGINS",
+    "http://localhost:5500,http://127.0.0.1:5500"
+)
+ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5500",
-        "http://127.0.0.1:5500"
-    ],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -47,9 +55,7 @@ app.add_middleware(
 
 manager = ConnectionManager()
 
-# ----------------------------
-# WEBSOCKET
-# ----------------------------
+
 @app.websocket("/ws/live")
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
@@ -59,16 +65,12 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         manager.disconnect(websocket)
 
-# ----------------------------
-# DEVICE UPDATE
-# ----------------------------
+
 @app.post("/device/update")
 async def device_update(data: DeviceUpdate):
     prev = device_state.get(data.device_id, {})
-
     prev_speed = prev.get("speed", data.speed)
 
-    # 🔑 EMERGENCY LOCK WITH EXPLICIT RESET
     if data.reset:
         emergency_locked = False
         alert_state.pop(data.device_id, None)
@@ -76,16 +78,10 @@ async def device_update(data: DeviceUpdate):
     else:
         emergency_locked = prev.get("emergency", False) or data.emergency
 
-    # ----------------------------
-    # CONTEXT + RISK
-    # ----------------------------
     anomaly = detect_speed_anomaly(prev_speed, data.speed)
     context = classify_context(data.speed)
     risk = calculate_risk(emergency_locked, anomaly)
 
-    # ----------------------------
-    # ESCALATION
-    # ----------------------------
     escalation = check_escalation(
         data.device_id,
         emergency_locked,
@@ -94,13 +90,8 @@ async def device_update(data: DeviceUpdate):
     )
 
     if escalation:
-        print(
-            f"🚨 ESCALATION | Device: {data.device_id} | Level: {escalation}"
-        )
+        print(f"🚨 ESCALATION | Device: {data.device_id} | Level: {escalation}")
 
-    # ----------------------------
-    # ALERT TRIGGER
-    # ----------------------------
     alert_triggered = False
 
     if should_alert(data.device_id, risk, data.timestamp, alert_state):
@@ -110,9 +101,6 @@ async def device_update(data: DeviceUpdate):
             f"🚨 ALERT | Device: {data.device_id} | Risk: {risk} | Time: {data.timestamp}"
         )
 
-    # ----------------------------
-    # PAYLOAD (AUTHORITATIVE STATE)
-    # ----------------------------
     payload = {
         "device_id": data.device_id,
         "latitude": data.latitude,
@@ -127,9 +115,6 @@ async def device_update(data: DeviceUpdate):
         "escalation": escalation
     }
 
-    # ----------------------------
-    # STORE STATE
-    # ----------------------------
     device_state[data.device_id] = payload
 
     if data.device_id not in device_history:
@@ -137,20 +122,20 @@ async def device_update(data: DeviceUpdate):
 
     device_history[data.device_id].append(payload)
 
-    # ----------------------------
-    # LIVE BROADCAST
-    # ----------------------------
     await manager.broadcast(payload)
 
     return {"status": "broadcasted", "risk": risk}
 
 
-# ----------------------------
-# DEBUG / UTILS
-# ----------------------------
 @app.get("/device/{device_id}")
 def get_device(device_id: str):
     return device_state.get(device_id, {"error": "Device not found"})
+
+
+# FIX #2: History endpoint that replay() in script.js actually calls
+@app.get("/device/{device_id}/history")
+def get_device_history(device_id: str):
+    return device_history.get(device_id, [])
 
 
 @app.get("/test/broadcast")
