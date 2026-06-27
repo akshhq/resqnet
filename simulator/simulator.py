@@ -3,14 +3,32 @@ import time
 import threading
 import random
 import sys
+import argparse
 
-BACKEND_URL = "http://127.0.0.1:8000/device/update"
-DEVICE_ID = "SIM_DEVICE_01"
+# Fix 1.10: read URL and device ID from CLI args so a second simulator
+# instance can be started without editing source code.
+# Usage: python simulator.py --url http://1.2.3.4:8000/device/update --id SIM_02
+parser = argparse.ArgumentParser(description="ResQNet Device Simulator")
+parser.add_argument(
+    "--url",
+    default="http://127.0.0.1:8000/device/update",
+    help="Backend /device/update endpoint (default: http://127.0.0.1:8000/device/update)"
+)
+parser.add_argument(
+    "--id",
+    default="SIM_DEVICE_01",
+    help="Device ID to send with every update (default: SIM_DEVICE_01)"
+)
+args = parser.parse_args()
+
+BACKEND_URL = args.url
+DEVICE_ID = args.id
 
 latitude = 28.6139
 longitude = 77.2090
 
-battery = 100
+battery = 100.0   # Fix 1.4: float so sub-integer drain is tracked accurately
+low_battery_warned = False  # Fix 1.4: ensure the 20% warning fires only once
 mode = "walking"
 emergency = False
 reset = False
@@ -30,12 +48,14 @@ def get_speed():
 
 def move():
     global latitude, longitude
-    latitude += random.uniform(0.00005, 0.0002)
-    longitude += random.uniform(0.00005, 0.0002)
+    # Fix 1.11: use signed random offsets so the device can move in any
+    # direction rather than always drifting northeast off the visible map.
+    latitude += random.uniform(-0.0002, 0.0002)
+    longitude += random.uniform(-0.0002, 0.0002)
 
 
 def send_loop():
-    global battery, reset
+    global battery, reset, low_battery_warned
 
     while True:
         with lock:
@@ -48,7 +68,7 @@ def send_loop():
                 "latitude": latitude,
                 "longitude": longitude,
                 "speed": speed,
-                "battery": int(battery),
+                "battery": round(battery),  # Fix 1.4: send rounded int; internal tracking stays float
                 "emergency": emergency,
                 "reset": reset
             }
@@ -62,7 +82,14 @@ def send_loop():
         with lock:
             reset = False
 
-        battery = max(battery - 0.05, 0)
+        # Fix 1.4: only drain if battery is above 0, and warn once at 20%
+        if battery > 0:
+            battery = max(battery - 0.05, 0)
+
+        if battery <= 20 and not low_battery_warned:
+            low_battery_warned = True
+            print("⚠️  LOW BATTERY: device battery at or below 20%")
+
         time.sleep(1)
 
 
@@ -129,5 +156,13 @@ def input_loop():
 
 if __name__ == "__main__":
     print("Starting ResQNet Device Simulator")
+    print(f"  Device ID : {DEVICE_ID}")
+    print(f"  Backend   : {BACKEND_URL}")
     threading.Thread(target=send_loop, daemon=True).start()
-    input_loop()
+    # Fix 3.1: catch KeyboardInterrupt so Ctrl+C exits cleanly rather than
+    # printing a traceback and leaving the backend with a dangling connection.
+    try:
+        input_loop()
+    except KeyboardInterrupt:
+        print("\nSimulator stopped.")
+        sys.exit(0)
