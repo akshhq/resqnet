@@ -14,16 +14,59 @@ let blinkInterval = null;
 let toastQueue = [];
 let toastRunning = false;
 
-const ws = new WebSocket("ws://127.0.0.1:8000/ws/live");
+// Fix 1.13: derive the WebSocket URL from the current page's host so the
+// dashboard works when the backend is deployed anywhere — not just localhost.
+// Override by setting window.RESQNET_WS_URL before this script loads.
+const WS_URL = window.RESQNET_WS_URL || `ws://${window.location.hostname}:8000/ws/live`;
 
-ws.onopen = () => {
-  statusBox.innerText = "WebSocket connected. Waiting for data...";
-};
+// Fix 1.6: reconnection state
+let ws = null;
+let reconnectDelay = 1000;   // start at 1 s, doubles each attempt, caps at 30 s
+const RECONNECT_MAX = 30000;
 
-ws.onmessage = (event) => {
-  console.log("WS DATA RECEIVED", event.data);
+function connect() {
+  ws = new WebSocket(WS_URL);
 
-  const data = JSON.parse(event.data);
+  ws.onopen = () => {
+    reconnectDelay = 1000;   // reset backoff on successful connection
+    statusBox.innerText = "WebSocket connected. Waiting for data...";
+  };
+
+  // Fix 1.5: handler logic lives in handlePayload() so replay() can call it
+  // directly without constructing a fake WebSocket event object.
+  ws.onmessage = (event) => {
+    handlePayload(JSON.parse(event.data));
+  };
+
+  // Fix 1.6: on error just log — onclose always fires after onerror and
+  // that is where reconnection is triggered.
+  ws.onerror = () => {
+    console.warn("WebSocket error — will attempt reconnect via onclose.");
+  };
+
+  // Fix 1.6: reconnect with exponential backoff on any close (error or server
+  // restart). Show a live countdown in the status box so the operator knows
+  // the dashboard is not permanently dead.
+  ws.onclose = () => {
+    const seconds = Math.round(reconnectDelay / 1000);
+    statusBox.innerText = `Disconnected. Reconnecting in ${seconds}s…`;
+
+    setTimeout(() => {
+      statusBox.innerText = "Reconnecting…";
+      connect();
+    }, reconnectDelay);
+
+    reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX);
+  };
+}
+
+connect();
+
+// Fix 1.5: standalone handler so both ws.onmessage and replay() use the same
+// code path without faking a WebSocket event object.
+function handlePayload(data) {
+  console.log("WS DATA RECEIVED", data);
+
   const { latitude, longitude, emergency, risk, context } = data;
 
   // FIX #5: Single status update block — removed the dead first assignments
@@ -86,15 +129,22 @@ ws.onmessage = (event) => {
 
   // Timeline entry
   const item = document.createElement("li");
+  // Fix 1.8: cap timeline at 100 entries so the DOM doesn't grow unbounded
+  // during long sessions and slow the browser to a crawl.
   item.innerText = `${new Date(data.timestamp * 1000).toLocaleTimeString()} — ${data.context} — ${data.risk}`;
   timeline.prepend(item);
+  while (timeline.children.length > 100) {
+    timeline.removeChild(timeline.lastChild);
+  }
 
-  map.setView([latitude, longitude], map.getZoom());
-};
-
-ws.onerror = () => {
-  statusBox.innerText = "WebSocket error";
-};
+  // Fix 1.7: only re-centre the map when the marker has drifted outside the
+  // currently visible bounds. This way the operator can freely pan/zoom
+  // without the map snapping back every second.
+  const latLng = [latitude, longitude];
+  if (!map.getBounds().contains(latLng)) {
+    map.setView(latLng, map.getZoom());
+  }
+}
 
 // FIX #9: Toast queue — shows one at a time, queues the rest
 function showToast(message) {
@@ -120,13 +170,16 @@ function processToastQueue() {
   }, 3000);
 }
 
+// Fix 1.5: call handlePayload() directly — no fake event object needed.
+// Previously this called ws.onmessage({ data: JSON.stringify(point) }) which
+// is fragile: any code in the handler that reads native WebSocket event
+// properties (type, target, etc.) would silently fail or throw.
 async function replay(deviceId) {
-  // Uses the corrected /history endpoint (fix #2 in main.py)
-  const res = await fetch(`http://127.0.0.1:8000/device/${deviceId}/history`);
+  const res = await fetch(`http://${window.location.hostname}:8000/device/${deviceId}/history`);
   const history = await res.json();
 
   for (const point of history) {
-    ws.onmessage({ data: JSON.stringify(point) });
+    handlePayload(point);
     await new Promise(r => setTimeout(r, 1000));
   }
 }

@@ -2,6 +2,9 @@
 <html>
 <head>
   <meta charset="UTF-8">
+  <!-- Fix 1.12: without this, mobile browsers render at desktop scale —
+       everything appears tiny and the map is unusable on a phone. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ResQNet Live Dashboard</title>
 
   <!-- Leaflet CSS -->
