@@ -1,8 +1,12 @@
+from collections import deque
+
 # Latest state of each device
 device_state = {}
 
-# Full timeline history per device
-# device_id -> list of events
+# Full timeline history per device — capped at 1000 entries per device.
+# deque(maxlen=1000) automatically discards the oldest entry when the cap is
+# reached, so a long-running session cannot silently exhaust all available RAM.
+# device_id -> deque of event dicts
 device_history = {}
 
 # Alert state per device
@@ -15,3 +19,5 @@ alert_state = {}
 #   "level": int
 # }
 escalation_state = {}
+
+HISTORY_MAXLEN = 1000

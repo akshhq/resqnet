@@ -5,11 +5,14 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.schemas import DeviceUpdate
+from collections import deque
+
 from app.storage import (
     device_state,
     device_history,
     alert_state,
-    escalation_state
+    escalation_state,
+    HISTORY_MAXLEN
 )
 from app.context import (
     classify_context,
@@ -72,10 +75,12 @@ async def device_update(data: DeviceUpdate):
     prev_speed = prev.get("speed", data.speed)
 
     if data.reset:
+        was_reset = True
         emergency_locked = False
         alert_state.pop(data.device_id, None)
         escalation_state.pop(data.device_id, None)
     else:
+        was_reset = False
         emergency_locked = prev.get("emergency", False) or data.emergency
 
     anomaly = detect_speed_anomaly(prev_speed, data.speed)
@@ -112,13 +117,19 @@ async def device_update(data: DeviceUpdate):
         "risk": risk,
         "timestamp": data.timestamp,
         "alert": alert_triggered,
-        "escalation": escalation
+        "escalation": escalation,
+        # Fix 1.1: explicit reset flag so dashboards can react to a reset event
+        # (e.g. clear escalation labels) rather than inferring it from
+        # emergency flipping to false.
+        "reset": was_reset
     }
 
     device_state[data.device_id] = payload
 
+    # Fix 1.2: initialise history as a bounded deque so it never grows
+    # beyond HISTORY_MAXLEN entries per device, preventing silent RAM exhaustion.
     if data.device_id not in device_history:
-        device_history[data.device_id] = []
+        device_history[data.device_id] = deque(maxlen=HISTORY_MAXLEN)
 
     device_history[data.device_id].append(payload)
 
@@ -135,7 +146,8 @@ def get_device(device_id: str):
 # FIX #2: History endpoint that replay() in script.js actually calls
 @app.get("/device/{device_id}/history")
 def get_device_history(device_id: str):
-    return device_history.get(device_id, [])
+    # deque is not JSON-serialisable directly — convert to list first.
+    return list(device_history.get(device_id, []))
 
 
 @app.get("/test/broadcast")

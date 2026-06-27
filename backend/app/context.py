@@ -68,15 +68,15 @@ def check_escalation(
 
     elapsed = timestamp - state["start"]
 
-    # NOTE: The loop fires at most ONE level per call (returns on first match).
-    # This means if updates arrive infrequently and elapsed jumps past multiple
-    # thresholds in one step, intermediate levels still fire — just on
-    # consecutive calls rather than simultaneously. For a 1 Hz simulator this
-    # is fine. If update frequency could be very low, consider advancing all
-    # pending levels in one pass instead.
+    # Advance ALL pending levels in one pass and return the highest one reached.
+    # This ensures that if updates arrive infrequently and elapsed jumps past
+    # multiple thresholds in a single call (e.g. device goes quiet for 90s then
+    # sends one update), every level is correctly advanced and the highest
+    # reached level is returned — so "critical" is never silently skipped.
+    fired = None
     for i, (threshold, label) in enumerate(ESCALATION_STEPS):
         if elapsed >= threshold and state["level"] < i + 1:
             state["level"] = i + 1
-            return label
+            fired = label
 
-    return None
+    return fired
