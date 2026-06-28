@@ -163,11 +163,16 @@
     <span id="conn-label">Connecting…</span>
   </div>
 
-  <!-- Status box -->
+  <!-- Status box — each field is a named span so JS never uses innerHTML -->
   <div class="status" id="status">
-    Waiting for device...
-    <!-- Fix 4.3: battery bar lives inside the status box -->
-    <div id="battery-bar-wrap" style="display:none;">
+    <b>Device:</b> <span id="s-device">—</span><br/>
+    <b>Context:</b> <span id="s-context">—</span><br/>
+    <b>Risk:</b> <span id="s-risk">—</span><br/>
+    <b>Emergency:</b> <span id="s-emergency">—</span>
+    <div id="s-esc-row"  style="display:none;"><b>Escalation:</b> <span id="s-escalation"></span></div>
+    <div id="s-reset-row" style="display:none;color:#16a34a;">✅ Reset</div>
+    <!-- Fix 4.3: battery bar lives here — never wiped because we use spans above -->
+    <div id="battery-bar-wrap" style="display:none;margin-top:6px;">
       <div id="battery-bar"></div>
     </div>
     <div id="battery-text" style="font-size:12px;margin-top:3px;display:none;"></div>

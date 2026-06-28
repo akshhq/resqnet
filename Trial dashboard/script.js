@@ -101,39 +101,43 @@ function handlePayload(data) {
 
   const { latitude, longitude, emergency, risk, context } = data;
 
-  // Fix 4.3: update battery bar and text
-  const batteryBarWrap = document.getElementById("battery-bar-wrap");
-  const batteryBar     = document.getElementById("battery-bar");
-  const batteryText    = document.getElementById("battery-text");
+  // Update status fields individually via named spans so innerHTML never
+  // wipes the battery bar elements that live inside the same status box.
+  document.getElementById("s-device").innerText     = data.device_id;
+  document.getElementById("s-context").innerText    = context;
+  document.getElementById("s-risk").innerText       = risk;
+  document.getElementById("s-emergency").innerText  = emergency;
+  const escRow = document.getElementById("s-esc-row");
+  const escVal = document.getElementById("s-escalation");
+  if (data.escalation) {
+    escVal.innerText      = data.escalation.toUpperCase();
+    escRow.style.display  = "block";
+  } else {
+    escRow.style.display  = "none";
+  }
+  const resetRow = document.getElementById("s-reset-row");
+  resetRow.style.display = data.reset ? "block" : "none";
+
+  // Fix 4.3: battery bar — update in-place, no innerHTML wipe involved
   if (data.battery !== undefined) {
+    const batteryBarWrap = document.getElementById("battery-bar-wrap");
+    const batteryBar     = document.getElementById("battery-bar");
+    const batteryText    = document.getElementById("battery-text");
     batteryBarWrap.style.display = "block";
     batteryText.style.display    = "block";
     batteryBar.style.width       = `${data.battery}%`;
     batteryText.innerText        = `Battery: ${data.battery}%`;
     if (data.battery <= 20) {
-      batteryBar.style.background = "#ef4444";   // red
+      batteryBar.style.background = "#ef4444";
       batteryText.style.color     = "#ef4444";
     } else if (data.battery <= 50) {
-      batteryBar.style.background = "#f59e0b";   // amber
+      batteryBar.style.background = "#f59e0b";
       batteryText.style.color     = "#92400e";
     } else {
-      batteryBar.style.background = "#22c55e";   // green
+      batteryBar.style.background = "#22c55e";
       batteryText.style.color     = "#166534";
     }
   }
-
-  statusBox.innerHTML = `
-    <b>Device:</b> ${data.device_id}<br/>
-    <b>Context:</b> ${context}<br/>
-    <b>Risk:</b> ${risk}<br/>
-    <b>Emergency:</b> ${emergency}
-    ${data.escalation ? `<br/><b>Escalation:</b> ${data.escalation.toUpperCase()}` : ""}
-    ${data.reset      ? `<br/><span style="color:#22c55e">✅ Reset</span>` : ""}
-  `;
-
-  // Re-attach battery bar (innerHTML wipe removes it)
-  statusBox.appendChild(batteryBarWrap);
-  statusBox.appendChild(batteryText);
 
   // Fix 4.5: play alert sound on first emergency trigger or escalation
   if (data.alert || data.escalation) {
