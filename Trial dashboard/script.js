@@ -1,36 +1,126 @@
-const timeline   = document.getElementById("timeline");
-const statusBox  = document.getElementById("status");
+const timeline    = document.getElementById("timeline");
+const statusBox   = document.getElementById("status");
 const connMessage = document.getElementById("conn-message");
+const connDot     = document.getElementById("conn-dot");
+const connLabel   = document.getElementById("conn-label");
 
-// Fix 4.1: connection status dot elements
-const connDot   = document.getElementById("conn-dot");
-const connLabel = document.getElementById("conn-label");
-
+// ---------------------------------------------------------------------------
+// Map setup — two tile layers for light/dark mode
+// ---------------------------------------------------------------------------
 const map = L.map("map").setView([28.61, 77.20], 15);
 
-L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-  attribution: "© OpenStreetMap"
-}).addTo(map);
+const tileLayers = {
+  light: L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution: "© OpenStreetMap"
+  }),
+  dark: L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+    attribution: "© OpenStreetMap © CARTO"
+  })
+};
+tileLayers.light.addTo(map);
+let darkMode = false;
 
-let marker = null;
+function toggleDarkMode() {
+  darkMode = !darkMode;
+  if (darkMode) {
+    tileLayers.light.remove();
+    tileLayers.dark.addTo(map);
+    document.body.classList.add("dark");
+    document.getElementById("dark-btn").innerText = "☀ Light Mode";
+  } else {
+    tileLayers.dark.remove();
+    tileLayers.light.addTo(map);
+    document.body.classList.remove("dark");
+    document.getElementById("dark-btn").innerText = "🌙 Dark Mode";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Trail colours — bright so they're visible on both light and dark tiles
+// ---------------------------------------------------------------------------
+const TRAIL_COLORS = {
+  normal:   "#00aaff",   // bright blue
+  elevated: "#ff9900",   // bright orange
+  critical: "#ff2222",   // bright red
+};
+const TRAIL_WEIGHT  = 4;
+const TRAIL_OPACITY = 0.95;
+
+// ---------------------------------------------------------------------------
+// Trail state
+// ---------------------------------------------------------------------------
+// activeTrailLayers: all polyline segments currently on the map (live mode)
+// replayTrailLayers: polylines drawn during replay (cleared when replay ends)
+let activeTrailLayers = [];
+let replayTrailLayers = [];
+
+// Per-device position history: device_id → [{lat, lng, risk, timestamp}, ...]
+// Kept in JS so we can extract the 5-min pre-emergency window without a fetch.
+const positionHistory = {};
+const HISTORY_WINDOW  = 5 * 60;   // 5 minutes in seconds
+
+// Whether an emergency is currently active (controls whether trail is shown)
+let emergencyActive = false;
+// Timestamp when emergency started (to anchor the 5-min lookback)
+let emergencyStartTs = null;
+
+// Whether replay is running (suppresses live trail drawing)
+let replayRunning = false;
+
+function clearTrailLayers(layerArray) {
+  layerArray.forEach(l => map.removeLayer(l));
+  layerArray.length = 0;
+  // Hide legend if no trails remain on map
+  if (activeTrailLayers.length === 0 && replayTrailLayers.length === 0) {
+    document.getElementById("trail-legend").classList.remove("visible");
+  }
+}
+
+// Draw a list of {lat, lng, risk} points as coloured polyline segments on map.
+// Returns the created layers so caller can track them.
+function drawTrailFromPoints(points) {
+  const layers = [];
+  if (points.length < 2) return layers;
+
+  let segStart = 0;
+  for (let i = 1; i <= points.length; i++) {
+    const riskChanged = i === points.length || points[i].risk !== points[i - 1].risk;
+    if (riskChanged) {
+      const seg   = points.slice(segStart, i);
+      const color = TRAIL_COLORS[seg[0].risk] || TRAIL_COLORS.normal;
+      const latlngs = seg.map(p => [p.lat, p.lng]);
+      const poly = L.polyline(latlngs, {
+        color, weight: TRAIL_WEIGHT, opacity: TRAIL_OPACITY
+      }).addTo(map);
+      layers.push(poly);
+      segStart = i - 1;
+    }
+  }
+  // Show legend whenever a trail is drawn
+  document.getElementById("trail-legend").classList.add("visible");
+  return layers;
+}
+
+// ---------------------------------------------------------------------------
+// Marker
+// ---------------------------------------------------------------------------
+let marker       = null;
 let blinkInterval = null;
 
-// Fix 4.2: polyline trail — grows with each position update, coloured by risk
-let trail = L.polyline([], { weight: 2, opacity: 0.7 }).addTo(map);
-let lastRisk = "normal"; // track risk at each point for trail colouring
-
-// FIX #9: Toast queue so overlapping alerts don't clobber each other
-let toastQueue = [];
+// ---------------------------------------------------------------------------
+// Toast
+// ---------------------------------------------------------------------------
+let toastQueue  = [];
 let toastRunning = false;
 
-// Fix 1.13: derive the WebSocket URL from the current page's host so the
-// dashboard works when the backend is deployed anywhere — not just localhost.
-// Override by setting window.RESQNET_WS_URL before this script loads.
-const WS_URL = window.RESQNET_WS_URL || `ws://${window.location.hostname}:8000/ws/live`;
+// ---------------------------------------------------------------------------
+// WebSocket
+// ---------------------------------------------------------------------------
+const WS_URL = window.RESQNET_WS_URL ||
+  `ws://${window.location.hostname}:8000/ws/live`;
 
-// Fix 1.6: reconnection state
 let ws = null;
-let reconnectDelay = 1000;   // start at 1 s, doubles each attempt, caps at 30 s
+let reconnectDelay = 1000;
 const RECONNECT_MAX = 30000;
 
 function connect() {
@@ -38,56 +128,45 @@ function connect() {
 
   ws.onopen = () => {
     reconnectDelay = 1000;
-    // Use connMessage — NOT statusBox.innerText — so we never wipe the
-    // child spans that handlePayload depends on.
-    connMessage.innerText   = "Connected. Waiting for device data…";
+    connMessage.innerText     = "Connected. Waiting for device data…";
     connMessage.style.display = "block";
-    // Fix 4.1: show green dot on successful connection
-    connDot.className   = "connected";
-    connLabel.innerText = "Live";
+    connDot.className         = "connected";
+    connLabel.innerText       = "Live";
   };
 
-  ws.onmessage = (event) => {
-    handlePayload(JSON.parse(event.data));
-  };
+  ws.onmessage = (event) => { handlePayload(JSON.parse(event.data)); };
 
   ws.onerror = () => {
-    console.warn("WebSocket error — will attempt reconnect via onclose.");
-    // Fix 4.1: amber dot on error before close fires
     connDot.className   = "reconnecting";
     connLabel.innerText = "Error";
   };
 
   ws.onclose = () => {
-    const seconds = Math.round(reconnectDelay / 1000);
-    connMessage.innerText     = `Disconnected. Reconnecting in ${seconds}s…`;
+    const secs = Math.round(reconnectDelay / 1000);
+    connMessage.innerText     = `Disconnected. Reconnecting in ${secs}s…`;
     connMessage.style.display = "block";
-    // Fix 4.1: red dot while disconnected
-    connDot.className   = "disconnected";
-    connLabel.innerText = `Reconnecting in ${seconds}s`;
-
+    connDot.className         = "disconnected";
+    connLabel.innerText       = `Reconnecting in ${secs}s`;
     setTimeout(() => {
       connMessage.innerText   = "Reconnecting…";
-      // Fix 4.1: amber dot while actively trying to reconnect
-      connDot.className   = "reconnecting";
-      connLabel.innerText = "Reconnecting…";
+      connDot.className       = "reconnecting";
+      connLabel.innerText     = "Reconnecting…";
       connect();
     }, reconnectDelay);
-
     reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX);
   };
 }
 
 connect();
 
-// Fix 4.5: play a short beep via Web Audio API when emergency triggers.
-// AudioContext must be created after a user gesture on some browsers, but for
-// an emergency dashboard the first alert toast/click is sufficient to unlock it.
+// ---------------------------------------------------------------------------
+// Audio
+// ---------------------------------------------------------------------------
 let audioCtx = null;
 function playAlertSound() {
   try {
     if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const osc = audioCtx.createOscillator();
+    const osc  = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
     osc.connect(gain);
     gain.connect(audioCtx.destination);
@@ -101,110 +180,129 @@ function playAlertSound() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Main payload handler
+// ---------------------------------------------------------------------------
 function handlePayload(data) {
-  console.log("WS DATA RECEIVED", data);
-
-  // Hide the "waiting" connection message the moment real data arrives
   connMessage.style.display = "none";
 
   const { latitude, longitude, emergency, risk, context } = data;
+  const deviceId = data.device_id;
 
-  // Update status fields individually via named spans so innerHTML never
-  // wipes the battery bar elements that live inside the same status box.
-  document.getElementById("s-device").innerText     = data.device_id;
-  document.getElementById("s-context").innerText    = context;
-  document.getElementById("s-risk").innerText       = risk;
-  document.getElementById("s-emergency").innerText  = emergency;
-  const escRow = document.getElementById("s-esc-row");
-  const escVal = document.getElementById("s-escalation");
-  if (data.escalation) {
-    escVal.innerText      = data.escalation.toUpperCase();
-    escRow.style.display  = "block";
-  } else {
-    escRow.style.display  = "none";
-  }
-  const resetRow = document.getElementById("s-reset-row");
-  resetRow.style.display = data.reset ? "block" : "none";
+  // --- Accumulate position history for this device ---
+  if (!positionHistory[deviceId]) positionHistory[deviceId] = [];
+  positionHistory[deviceId].push({
+    lat: latitude, lng: longitude,
+    risk, ts: data.timestamp
+  });
+  // Trim to last 10 minutes (keep more than 5 min so replay has full window)
+  const cutoff = data.timestamp - 600;
+  positionHistory[deviceId] = positionHistory[deviceId].filter(p => p.ts >= cutoff);
 
-  // Fix 4.3: battery bar — update in-place, no innerHTML wipe involved
-  if (data.battery !== undefined) {
-    const batteryBarWrap = document.getElementById("battery-bar-wrap");
-    const batteryBar     = document.getElementById("battery-bar");
-    const batteryText    = document.getElementById("battery-text");
-    batteryBarWrap.style.display = "block";
-    batteryText.style.display    = "block";
-    batteryBar.style.width       = `${data.battery}%`;
-    batteryText.innerText        = `Battery: ${data.battery}%`;
-    if (data.battery <= 20) {
-      batteryBar.style.background = "#ef4444";
-      batteryText.style.color     = "#ef4444";
-    } else if (data.battery <= 50) {
-      batteryBar.style.background = "#f59e0b";
-      batteryText.style.color     = "#92400e";
-    } else {
-      batteryBar.style.background = "#22c55e";
-      batteryText.style.color     = "#166534";
+  // --- Emergency state transitions ---
+  const wasEmergency = emergencyActive;
+
+  if (emergency && !wasEmergency) {
+    // Emergency just started — record start time and draw pre-emergency trail
+    emergencyActive  = true;
+    emergencyStartTs = data.timestamp;
+    clearTrailLayers(activeTrailLayers);
+
+    // Pull last 5 min of history before this moment
+    const windowStart = emergencyStartTs - HISTORY_WINDOW;
+    const prePoints   = positionHistory[deviceId].filter(
+      p => p.ts >= windowStart && p.ts <= emergencyStartTs
+    );
+    if (prePoints.length >= 2) {
+      activeTrailLayers.push(...drawTrailFromPoints(prePoints));
     }
   }
 
-  // Fix 4.5: play alert sound on first emergency trigger or escalation
-  if (data.alert || data.escalation) {
-    playAlertSound();
+  if (!emergency && wasEmergency) {
+    // Emergency ended (reset) — clear the trail
+    emergencyActive  = false;
+    emergencyStartTs = null;
+    clearTrailLayers(activeTrailLayers);
   }
 
-  // Toast alerts
-  if (data.alert) {
-    showToast(`🚨 ALERT: ${data.risk.toUpperCase()}`);
+  // --- Extend live trail tick-by-tick during active emergency ---
+  // (skip during replay — replay draws its own trail all at once)
+  if (emergencyActive && !replayRunning) {
+    const prev = activeTrailLayers.length > 0
+      ? activeTrailLayers[activeTrailLayers.length - 1]
+      : null;
+
+    // If risk changed, start a new segment; else extend the last one
+    const color = TRAIL_COLORS[risk] || TRAIL_COLORS.normal;
+    if (!prev || prev.options.color !== color) {
+      const poly = L.polyline([[latitude, longitude]], {
+        color, weight: TRAIL_WEIGHT, opacity: TRAIL_OPACITY
+      }).addTo(map);
+      activeTrailLayers.push(poly);
+      document.getElementById("trail-legend").classList.add("visible");
+    } else {
+      prev.addLatLng([latitude, longitude]);
+    }
   }
+
+  // --- Status box ---
+  document.getElementById("s-device").innerText    = deviceId;
+  document.getElementById("s-context").innerText   = context;
+  document.getElementById("s-risk").innerText      = risk;
+  document.getElementById("s-emergency").innerText = emergency;
+
+  const escRow = document.getElementById("s-esc-row");
+  const escVal = document.getElementById("s-escalation");
   if (data.escalation) {
-    showToast(`🚨 ESCALATION: ${data.escalation.toUpperCase()}`);
+    escVal.innerText     = data.escalation.toUpperCase();
+    escRow.style.display = "block";
+  } else {
+    escRow.style.display = "none";
+  }
+  document.getElementById("s-reset-row").style.display = data.reset ? "block" : "none";
+
+  // --- Battery bar ---
+  if (data.battery !== undefined) {
+    const wrap = document.getElementById("battery-bar-wrap");
+    const bar  = document.getElementById("battery-bar");
+    const txt  = document.getElementById("battery-text");
+    wrap.style.display = "block";
+    txt.style.display  = "block";
+    bar.style.width    = `${data.battery}%`;
+    txt.innerText      = `Battery: ${data.battery}%`;
+    if (data.battery <= 20) {
+      bar.style.background = "#ef4444"; txt.style.color = "#ef4444";
+    } else if (data.battery <= 50) {
+      bar.style.background = "#f59e0b"; txt.style.color = "#92400e";
+    } else {
+      bar.style.background = "#22c55e"; txt.style.color = "#166534";
+    }
   }
 
-  // Marker colour
-  let color = "green";
-  if (data.emergency === true) {
-    color = "red";
-  } else if (data.risk === "critical") {
-    color = "red";
-  } else if (data.risk === "elevated") {
-    color = "orange";
-  }
+  // --- Alerts ---
+  if (data.alert || data.escalation) playAlertSound();
+  if (data.alert)     showToast(`🚨 ALERT: ${risk.toUpperCase()}`);
+  if (data.escalation) showToast(`🚨 ESCALATION: ${data.escalation.toUpperCase()}`);
 
-  // Create or update marker
+  // --- Marker ---
+  const color = emergency ? "#ff2222"
+              : risk === "elevated" ? "#ff9900"
+              : "#22c55e";
+
   if (!marker) {
     marker = L.circleMarker([latitude, longitude], {
-      radius: 10,
-      color: color,
-      fillColor: color,
-      fillOpacity: 0.8
+      radius: 10, color, fillColor: color, fillOpacity: 0.9
     }).addTo(map);
   } else {
     marker.setLatLng([latitude, longitude]);
-    marker.setStyle({ color: color, fillColor: color });
+    marker.setStyle({ color, fillColor: color });
   }
 
-  // Fix 4.2: append this position to the movement trail.
-  // Start a new coloured segment whenever risk level changes so the trail
-  // visually shows where the situation escalated.
-  if (risk !== lastRisk) {
-    // Begin a fresh polyline segment in the new risk colour
-    const segColor = risk === "critical" ? "#ef4444"
-                   : risk === "elevated" ? "#f59e0b"
-                   : "#3b82f6";
-    trail = L.polyline([[latitude, longitude]], {
-      color: segColor, weight: 2, opacity: 0.7
-    }).addTo(map);
-    lastRisk = risk;
-  } else {
-    trail.addLatLng([latitude, longitude]);
-  }
-
-  // Blink on emergency
-  if (data.emergency && marker) {
+  if (emergency && marker) {
     if (!blinkInterval) {
       blinkInterval = setInterval(() => {
         marker.setStyle({
-          fillOpacity: marker.options.fillOpacity === 0.8 ? 0.2 : 0.8
+          fillOpacity: marker.options.fillOpacity === 0.9 ? 0.2 : 0.9
         });
       }, 500);
     }
@@ -212,62 +310,109 @@ function handlePayload(data) {
     if (blinkInterval) {
       clearInterval(blinkInterval);
       blinkInterval = null;
-      if (marker) marker.setStyle({ fillOpacity: 0.8 });
+      if (marker) marker.setStyle({ fillOpacity: 0.9 });
     }
   }
 
-  // Fix 4.4: show ISO timestamp on hover via title attribute, human time as text
-  const item = document.createElement("li");
+  // --- Timeline ---
+  const item      = document.createElement("li");
   const humanTime = new Date(data.timestamp * 1000).toLocaleTimeString();
   const isoTime   = new Date(data.timestamp * 1000).toISOString();
   item.title      = `Unix: ${data.timestamp}  |  ISO: ${isoTime}`;
   item.innerText  = `${humanTime} — ${context} — ${risk}`;
   timeline.prepend(item);
-  while (timeline.children.length > 100) {
-    timeline.removeChild(timeline.lastChild);
-  }
+  while (timeline.children.length > 100) timeline.removeChild(timeline.lastChild);
 
-  // Fix 1.7: only re-centre when device drifts outside visible bounds
+  // --- Auto-pan only when device leaves visible bounds ---
   const latLng = [latitude, longitude];
-  if (!map.getBounds().contains(latLng)) {
-    map.setView(latLng, map.getZoom());
-  }
+  if (!map.getBounds().contains(latLng)) map.setView(latLng, map.getZoom());
 }
 
-// FIX #9: Toast queue — shows one at a time, queues the rest
+// ---------------------------------------------------------------------------
+// Toast
+// ---------------------------------------------------------------------------
 function showToast(message) {
   toastQueue.push(message);
   if (!toastRunning) processToastQueue();
 }
 
 function processToastQueue() {
-  if (toastQueue.length === 0) {
-    toastRunning = false;
-    return;
-  }
-
+  if (toastQueue.length === 0) { toastRunning = false; return; }
   toastRunning = true;
   const toast = document.getElementById("toast");
   toast.textContent = toastQueue.shift();
   toast.classList.add("show");
-
   setTimeout(() => {
     toast.classList.remove("show");
-    // Small gap between toasts so the fade-out is visible
     setTimeout(processToastQueue, 400);
   }, 3000);
 }
 
-// Fix 1.5: call handlePayload() directly — no fake event object needed.
-// Previously this called ws.onmessage({ data: JSON.stringify(point) }) which
-// is fragile: any code in the handler that reads native WebSocket event
-// properties (type, target, etc.) would silently fail or throw.
+// ---------------------------------------------------------------------------
+// Replay
+// ---------------------------------------------------------------------------
 async function replay(deviceId) {
-  const res = await fetch(`http://${window.location.hostname}:8000/device/${deviceId}/history`);
+  if (!deviceId) return;
+
+  // Fetch full history from backend
+  const res     = await fetch(
+    `http://${window.location.hostname}:8000/device/${deviceId}/history`
+  );
   const history = await res.json();
+  if (!history.length) { showToast("No history found for that device."); return; }
+
+  // Clear any existing live trail and suppres live trail drawing
+  clearTrailLayers(activeTrailLayers);
+  clearTrailLayers(replayTrailLayers);
+  replayRunning = true;
+
+  // Find the emergency window in history (first panic trigger → reset/end)
+  const emergencyPoints = [];
+  let inEmergency = false;
 
   for (const point of history) {
-    handlePayload(point);
-    await new Promise(r => setTimeout(r, 1000));
+    if (point.emergency && !inEmergency) inEmergency = true;
+    if (!point.emergency && inEmergency) inEmergency = false;   // reset happened
+    if (inEmergency) {
+      emergencyPoints.push({
+        lat: point.latitude, lng: point.longitude,
+        risk: point.risk, ts: point.timestamp
+      });
+    }
   }
+
+  // Pre-emergency: 5 min before first panic
+  let prePoints = [];
+  if (emergencyPoints.length > 0) {
+    const firstPanicTs  = emergencyPoints[0].ts;
+    const windowStart   = firstPanicTs - HISTORY_WINDOW;
+    prePoints = history
+      .filter(p => p.timestamp >= windowStart && p.timestamp < firstPanicTs)
+      .map(p => ({ lat: p.latitude, lng: p.longitude, risk: "normal", ts: p.timestamp }));
+  }
+
+  const trailPoints = [...prePoints, ...emergencyPoints];
+
+  if (trailPoints.length < 2) {
+    showToast("No emergency path in history to replay.");
+    replayRunning = false;
+    return;
+  }
+
+  // Draw the full path all at once (don't animate it point-by-point)
+  replayTrailLayers.push(...drawTrailFromPoints(trailPoints));
+
+  // Fit map to the replay trail
+  const allLatLngs = trailPoints.map(p => [p.lat, p.lng]);
+  map.fitBounds(L.latLngBounds(allLatLngs), { padding: [40, 40] });
+
+  // Now step through payloads to animate the marker and timeline
+  // handlePayload is called but trail drawing is suppressed (replayRunning=true)
+  for (const point of history) {
+    handlePayload(point);
+    await new Promise(r => setTimeout(r, 300));
+  }
+
+  replayRunning = false;
+  showToast("Replay complete.");
 }
