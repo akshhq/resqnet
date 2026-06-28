@@ -1,11 +1,11 @@
 import os
+from collections import deque
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.schemas import DeviceUpdate
-from collections import deque
 
 from app.storage import (
     device_state,
