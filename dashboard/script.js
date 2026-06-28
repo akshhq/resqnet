@@ -1,6 +1,10 @@
 const timeline = document.getElementById("timeline");
 const statusBox = document.getElementById("status");
 
+// Fix 4.1: connection status dot elements
+const connDot   = document.getElementById("conn-dot");
+const connLabel = document.getElementById("conn-label");
+
 const map = L.map("map").setView([28.61, 77.20], 15);
 
 L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -9,6 +13,10 @@ L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
 
 let marker = null;
 let blinkInterval = null;
+
+// Fix 4.2: polyline trail — grows with each position update, coloured by risk
+let trail = L.polyline([], { weight: 2, opacity: 0.7 }).addTo(map);
+let lastRisk = "normal"; // track risk at each point for trail colouring
 
 // FIX #9: Toast queue so overlapping alerts don't clobber each other
 let toastQueue = [];
@@ -28,31 +36,36 @@ function connect() {
   ws = new WebSocket(WS_URL);
 
   ws.onopen = () => {
-    reconnectDelay = 1000;   // reset backoff on successful connection
+    reconnectDelay = 1000;
     statusBox.innerText = "WebSocket connected. Waiting for data...";
+    // Fix 4.1: show green dot on successful connection
+    connDot.className   = "connected";
+    connLabel.innerText = "Live";
   };
 
-  // Fix 1.5: handler logic lives in handlePayload() so replay() can call it
-  // directly without constructing a fake WebSocket event object.
   ws.onmessage = (event) => {
     handlePayload(JSON.parse(event.data));
   };
 
-  // Fix 1.6: on error just log — onclose always fires after onerror and
-  // that is where reconnection is triggered.
   ws.onerror = () => {
     console.warn("WebSocket error — will attempt reconnect via onclose.");
+    // Fix 4.1: amber dot on error before close fires
+    connDot.className   = "reconnecting";
+    connLabel.innerText = "Error";
   };
 
-  // Fix 1.6: reconnect with exponential backoff on any close (error or server
-  // restart). Show a live countdown in the status box so the operator knows
-  // the dashboard is not permanently dead.
   ws.onclose = () => {
     const seconds = Math.round(reconnectDelay / 1000);
     statusBox.innerText = `Disconnected. Reconnecting in ${seconds}s…`;
+    // Fix 4.1: red dot while disconnected
+    connDot.className   = "disconnected";
+    connLabel.innerText = `Reconnecting in ${seconds}s`;
 
     setTimeout(() => {
       statusBox.innerText = "Reconnecting…";
+      // Fix 4.1: amber dot while actively trying to reconnect
+      connDot.className   = "reconnecting";
+      connLabel.innerText = "Reconnecting…";
       connect();
     }, reconnectDelay);
 
@@ -62,22 +75,70 @@ function connect() {
 
 connect();
 
-// Fix 1.5: standalone handler so both ws.onmessage and replay() use the same
-// code path without faking a WebSocket event object.
+// Fix 4.5: play a short beep via Web Audio API when emergency triggers.
+// AudioContext must be created after a user gesture on some browsers, but for
+// an emergency dashboard the first alert toast/click is sufficient to unlock it.
+let audioCtx = null;
+function playAlertSound() {
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.frequency.value = 880;
+    gain.gain.setValueAtTime(0.4, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.4);
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.4);
+  } catch (e) {
+    console.warn("Audio alert failed:", e);
+  }
+}
+
 function handlePayload(data) {
   console.log("WS DATA RECEIVED", data);
 
   const { latitude, longitude, emergency, risk, context } = data;
 
-  // FIX #5: Single status update block — removed the dead first assignments
-  // that were immediately overwritten by the innerHTML block below.
+  // Fix 4.3: update battery bar and text
+  const batteryBarWrap = document.getElementById("battery-bar-wrap");
+  const batteryBar     = document.getElementById("battery-bar");
+  const batteryText    = document.getElementById("battery-text");
+  if (data.battery !== undefined) {
+    batteryBarWrap.style.display = "block";
+    batteryText.style.display    = "block";
+    batteryBar.style.width       = `${data.battery}%`;
+    batteryText.innerText        = `Battery: ${data.battery}%`;
+    if (data.battery <= 20) {
+      batteryBar.style.background = "#ef4444";   // red
+      batteryText.style.color     = "#ef4444";
+    } else if (data.battery <= 50) {
+      batteryBar.style.background = "#f59e0b";   // amber
+      batteryText.style.color     = "#92400e";
+    } else {
+      batteryBar.style.background = "#22c55e";   // green
+      batteryText.style.color     = "#166534";
+    }
+  }
+
   statusBox.innerHTML = `
     <b>Device:</b> ${data.device_id}<br/>
     <b>Context:</b> ${context}<br/>
     <b>Risk:</b> ${risk}<br/>
     <b>Emergency:</b> ${emergency}
     ${data.escalation ? `<br/><b>Escalation:</b> ${data.escalation.toUpperCase()}` : ""}
+    ${data.reset      ? `<br/><span style="color:#22c55e">✅ Reset</span>` : ""}
   `;
+
+  // Re-attach battery bar (innerHTML wipe removes it)
+  statusBox.appendChild(batteryBarWrap);
+  statusBox.appendChild(batteryText);
+
+  // Fix 4.5: play alert sound on first emergency trigger or escalation
+  if (data.alert || data.escalation) {
+    playAlertSound();
+  }
 
   // Toast alerts
   if (data.alert) {
@@ -110,7 +171,23 @@ function handlePayload(data) {
     marker.setStyle({ color: color, fillColor: color });
   }
 
-  // FIX #3: Blink interval only started after marker is guaranteed to exist
+  // Fix 4.2: append this position to the movement trail.
+  // Start a new coloured segment whenever risk level changes so the trail
+  // visually shows where the situation escalated.
+  if (risk !== lastRisk) {
+    // Begin a fresh polyline segment in the new risk colour
+    const segColor = risk === "critical" ? "#ef4444"
+                   : risk === "elevated" ? "#f59e0b"
+                   : "#3b82f6";
+    trail = L.polyline([[latitude, longitude]], {
+      color: segColor, weight: 2, opacity: 0.7
+    }).addTo(map);
+    lastRisk = risk;
+  } else {
+    trail.addLatLng([latitude, longitude]);
+  }
+
+  // Blink on emergency
   if (data.emergency && marker) {
     if (!blinkInterval) {
       blinkInterval = setInterval(() => {
@@ -127,19 +204,18 @@ function handlePayload(data) {
     }
   }
 
-  // Timeline entry
+  // Fix 4.4: show ISO timestamp on hover via title attribute, human time as text
   const item = document.createElement("li");
-  // Fix 1.8: cap timeline at 100 entries so the DOM doesn't grow unbounded
-  // during long sessions and slow the browser to a crawl.
-  item.innerText = `${new Date(data.timestamp * 1000).toLocaleTimeString()} — ${data.context} — ${data.risk}`;
+  const humanTime = new Date(data.timestamp * 1000).toLocaleTimeString();
+  const isoTime   = new Date(data.timestamp * 1000).toISOString();
+  item.title      = `Unix: ${data.timestamp}  |  ISO: ${isoTime}`;
+  item.innerText  = `${humanTime} — ${context} — ${risk}`;
   timeline.prepend(item);
   while (timeline.children.length > 100) {
     timeline.removeChild(timeline.lastChild);
   }
 
-  // Fix 1.7: only re-centre the map when the marker has drifted outside the
-  // currently visible bounds. This way the operator can freely pan/zoom
-  // without the map snapping back every second.
+  // Fix 1.7: only re-centre when device drifts outside visible bounds
   const latLng = [latitude, longitude];
   if (!map.getBounds().contains(latLng)) {
     map.setView(latLng, map.getZoom());
