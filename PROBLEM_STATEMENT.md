@@ -1,102 +1,173 @@
-# ResQNet — Problem Statement
-### Response & Rescue Network
+# ResQNet
+## Response & Rescue Network
+
+> *"The phone is the first thing that gets taken."*
 
 ---
 
-## Domain
+## The Situation
 
-**Personal Safety & Emergency Response Systems**
-**Type:** Context-Aware IoT / Software Prototype
+Picture this.
 
----
+Someone is being followed. They reach for their phone to call for help — but it's grabbed out of their hand. Or the battery is dead. Or they're in a state of panic and can't navigate a lock screen. Or they're forced at gunpoint to cancel the alert they just sent.
 
-## Background
+In every one of these scenarios, every existing SOS app fails completely.
 
-Every year, millions of people across the world find themselves in life-threatening situations — assaults, accidents, medical episodes, or abductions — where seconds determine survival. The most common emergency tool available is a smartphone. Yet the smartphone itself is frequently the first casualty in an emergency: it gets snatched, runs out of battery, gets locked by an attacker, or simply isn't reachable when panic sets in.
-
-Existing SOS applications assume the user has calm, unobstructed access to their phone. They also send nothing more than a static location pin — stripping away all the contextual information (is the person moving? accelerating? stationary and unresponsive?) that a first responder or trusted contact desperately needs to act effectively.
+This is not an edge case. It is the most common pattern in real assault and abduction situations. The tool people rely on most is the one most easily taken away.
 
 ---
 
-## The Core Problem
+## What's Actually Broken
 
-Current personal emergency systems fail at the moment they are needed most, in **four compounding ways**:
+Existing emergency systems — Google Emergency SOS, Apple Crash Detection, third-party SOS apps — were all built on the same flawed assumption:
 
-### 1. Device Dependency Without Fallback
-All mainstream SOS tools are smartphone-bound. When a phone is seized, damaged, dead, or simply out of reach, the person in distress has no alternative channel to signal for help.
+**The user has calm, unobstructed access to their smartphone.**
 
-### 2. Context Blindness
-Existing systems transmit only a location coordinate. They provide no insight into what is actually happening — whether the victim is running, being transported in a vehicle, unconscious and stationary, or in a rapidly evolving situation. Emergency contacts receive a pin on a map with no ability to assess severity.
-
-### 3. No Intelligent Escalation
-Once an SOS is sent, most systems go silent. There is no mechanism to distinguish a quickly-resolved situation from one that is worsening over time. A person who remains in distress for 90 seconds receives the same alert weight as one who triggered SOS by mistake and resolved it in seconds.
-
-### 4. Vulnerability to Coercion and False Resets
-Conventional SOS systems allow the user to cancel an alert at any time. This is exploited in coercion scenarios — an attacker can force the victim to cancel the alert. There is no way for emergency contacts to know whether a cancellation was voluntary or coerced.
+They don't. And when they don't, four things break simultaneously:
 
 ---
 
-## Impact
-
-These gaps produce a dangerous outcome: **emergency contacts are either uninformed, misinformed, or too late to respond.** The person in distress is effectively isolated at the exact moment they need the most support.
-
-In a country like India, where personal safety infrastructure is uneven and response times vary drastically by region, this problem is especially acute for individuals who are alone, in transit, or in low-connectivity areas.
+### ① The Trigger Fails
+Every SOS system today is smartphone-bound. No phone = no alert. There is no secondary trigger. No wearable fallback. No way to signal distress without a functioning device in hand.
 
 ---
 
-## What's Missing
+### ② The Alert Is Useless
+Even when the alert does fire, it sends a single GPS coordinate to a contact. That contact sees a pin on a map.
 
-There is no lightweight, software-demonstrable system that:
+They have no idea:
+- Is the person moving or stationary?
+- Are they running away or being driven somewhere?
+- Have they been unconscious for 30 seconds or 30 minutes?
+- Is the situation getting worse?
 
-- Works **independently of constant smartphone interaction**
-- Provides **real-time motion and location context**, not just a static pin
-- **Locks emergency state** against coerced cancellation
-- Escalates alerts **intelligently over time** if danger persists
-- Gives trusted contacts a **live situational dashboard**, not just a notification
-
----
-
-## Solution Scope — ResQNet
-
-ResQNet addresses this gap by building a **context-aware, latch-based emergency response prototype** that:
-
-- Accepts a panic trigger from a simulated wearable device (no smartphone interaction required)
-- Analyzes real-time speed and movement to classify situational risk
-- Locks the emergency state so it cannot be silently dismissed
-- Escalates severity automatically at **30s** and **90s** thresholds
-- Streams live location, motion context, and event history to a monitoring dashboard over WebSocket
-
-The system is implemented as a software prototype using **Python (FastAPI)**, **WebSockets**, and a **Leaflet.js dashboard** — demonstrating the full architecture without requiring physical hardware.
+A pin on a map is not situational awareness. It is noise.
 
 ---
 
-## Success Criteria
-
-ResQNet is considered successful if it can demonstrate, end-to-end:
-
-| # | Criterion |
-|---|-----------|
-| 1 | Panic trigger → immediate emergency lock |
-| 2 | Live context (speed, movement mode, GPS) visible on dashboard within 1 second |
-| 3 | Time-based escalation firing accurately at 30s and 90s |
-| 4 | Explicit-only reset restoring normal state |
-| 5 | No false auto-cancellations under any simulated scenario |
+### ③ Nothing Escalates
+Once an SOS is sent, the system goes quiet. A person who triggered an alert 90 seconds ago and is now in critical danger looks exactly the same to their contact as someone who triggered it 5 seconds ago and is already safe. There is no automatic urgency increase. Responders have no way to prioritise.
 
 ---
 
-## Tech Stack
-
-| Layer | Technology |
-|-------|------------|
-| Backend | Python, FastAPI, WebSockets |
-| Frontend | HTML, JavaScript, Leaflet.js |
-| Simulator | Python (multi-threaded) |
-| State | In-memory (prototype stage) |
+### ④ The Alert Can Be Forced Off
+This is the most dangerous failure. Every mainstream SOS system allows the user to cancel the alert at any time. In a coercion scenario, an attacker can simply force the victim to cancel. The contact receives silence and assumes everything is fine. It isn't.
 
 ---
 
-> **Disclaimer:** ResQNet is not intended to replace official emergency services. It is a research prototype demonstrating an architectural approach to smarter, device-independent personal safety systems.
+## The Human Cost
+
+These four failures compound. A responder who receives a static pin, with no context, no escalation, and no confidence the alert is still active — hesitates. That hesitation is measured in minutes. In real emergencies, minutes are the difference.
 
 ---
 
-*Author: Aksh Kumar — Undergraduate Computer Science Student*
+## What Needs to Exist
+
+A system that works **when everything else has failed**. One that:
+
+- Can be triggered **without touching a smartphone**
+- Tells responders **what is actually happening**, not just where
+- **Cannot be silently cancelled** — by the attacker or by accident
+- **Gets louder automatically** if the danger doesn't stop
+- Gives trusted contacts a **live operational picture**, not a notification
+
+---
+
+## How ResQNet Solves It
+
+ResQNet is built around one principle: **the device is the trigger, the backend is the truth, and the dashboard is the eyes.**
+
+---
+
+### The Device
+A wearable or clip-on device — currently simulated in software — carries a single physical panic button. One press. No phone needed. The signal goes directly to the backend over WiFi or cellular.
+
+The device cannot be silenced by taking the phone. The emergency state lives on the server, not the handset.
+
+---
+
+### The Backend
+When panic triggers, the backend **latches** the emergency state. It cannot be cleared by a network drop, an accidental tap, or a coerced cancel. Only an explicit, authorised reset signal clears it.
+
+Every second, the backend receives a position update and does four things:
+
+| Step | What happens |
+|---|---|
+| **Classify** | Speed → context: stationary / walking / running / vehicle |
+| **Detect** | Sudden speed jump > 5 m/s → anomaly flag |
+| **Assess** | Emergency + anomaly → risk level (normal / elevated / critical) |
+| **Escalate** | 30s elapsed → escalated · 90s elapsed → critical |
+
+All of this is broadcast in real time to every connected dashboard.
+
+---
+
+### The Dashboard
+Trusted contacts don't get a notification. They get a live operations view:
+
+- **Map** with a blinking red marker at the device's exact position
+- **Movement trail** — the path taken in the 5 minutes before the panic trigger, plus live updates
+- **Context label** — running, in a vehicle, stationary and unresponsive
+- **Escalation state** — how long the emergency has been active and how serious it has become
+- **Battery level** — so they know if contact is about to be lost
+- **Timeline** — every event, timestamped, in sequence
+
+The responder sees the full picture. They know whether to call the police, drive to a location, or wait for an update. They are not guessing.
+
+---
+
+## The Architecture
+
+```
+  [ Wearable Device / Simulator ]
+            │
+            │  1 update / second
+            ▼
+     [ FastAPI Backend ]
+      ┌─────────────┐
+      │  Classify   │  speed → context
+      │  Detect     │  anomaly check
+      │  Assess     │  risk level
+      │  Escalate   │  30s / 90s thresholds
+      └─────────────┘
+            │
+            │  WebSocket broadcast
+            ▼
+   [ Live Dashboard ]          [ Responder App — planned ]
+   [ Command Center — planned ]
+```
+
+---
+
+## What This Is Not
+
+ResQNet is a **software-first prototype**. It demonstrates the complete architecture — trigger, classification, escalation, broadcast, dashboard — without requiring physical hardware. The simulator produces realistic human movement patterns (heading-based, speed-smoothed, with GPS noise) so the system behaves exactly as it would with a real device.
+
+It is not a finished product. It is proof that the architecture works, and a foundation to build on.
+
+---
+
+## What Gets Built Next
+
+The prototype establishes the core. The roadmap builds the layers around it:
+
+| Phase | What gets added |
+|---|---|
+| **Notifications** | SMS, email, WhatsApp alerts to trusted contacts on trigger |
+| **User accounts** | Device owners manage their devices, contacts, and incident history |
+| **Responder dashboard** | Time-limited access for contacts during an active emergency |
+| **Command center** | Organisations monitoring hundreds of devices simultaneously |
+| **Hardware** | ESP32 + GPS module + physical panic button + LiPo battery |
+| **Auth + security** | API keys, JWT, rate limiting, registered device enforcement |
+
+---
+
+## In One Sentence
+
+ResQNet replaces the broken assumption that a person in danger has calm access to their phone — with a system that works precisely when they don't.
+
+---
+
+*ResQNet is a research prototype. It is not intended to replace official emergency services.*
+
+**Author:** Aksh Kumar — Undergraduate Computer Science Student
