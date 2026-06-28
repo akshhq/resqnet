@@ -19,6 +19,14 @@ parser.add_argument(
     default="SIM_DEVICE_01",
     help="Device ID to send with every update (default: SIM_DEVICE_01)"
 )
+# Fix 3.2: --demo runs a fully scripted scenario so presentations don't need
+# manual keypresses at the right moment. Sequence mirrors the TODO spec:
+#   0s  walk  →  10s panic  →  15s run  →  ~30s escalated  →  ~90s critical  →  110s reset
+parser.add_argument(
+    "--demo",
+    action="store_true",
+    help="Run the scripted demo scenario automatically instead of interactive mode"
+)
 args = parser.parse_args()
 
 BACKEND_URL = args.url
@@ -154,6 +162,64 @@ def input_loop():
                 sys.exit(0)
 
 
+def demo_loop():
+    """
+    Fix 3.2: scripted demo scenario — no keypresses needed.
+
+    Timeline:
+      0s   → walking (normal)
+      10s  → panic triggered
+      15s  → mode switches to running (speed anomaly visible)
+      30s  → backend fires "escalated" automatically (no action needed here)
+      90s  → backend fires "critical" automatically
+      110s → reset sent, returns to normal
+      120s → simulator exits cleanly
+
+    Run with:  python simulator.py --demo
+    """
+    global emergency, mode, reset
+
+    STEPS = [
+        # (elapsed_seconds, action_fn, label)
+        (0,   lambda: None,                          "▶  Walking — normal state"),
+        (10,  lambda: _demo_set(panic=True),         "🚨 Panic triggered"),
+        (15,  lambda: _demo_set(new_mode="running"), "🏃 Switched to running"),
+        # 30s and 90s escalations fire automatically in the backend
+        (110, lambda: _demo_set(do_reset=True),      "✅ Reset sent — returning to normal"),
+        (120, lambda: sys.exit(0),                   "🏁 Demo complete — exiting"),
+    ]
+
+    print("\n--- DEMO MODE ---")
+    print("Scenario will run automatically. No keypresses needed.")
+    print("Timeline: walk 10s → panic → run → escalate 30s → critical 90s → reset 110s\n")
+
+    start = time.time()
+    step_index = 0
+
+    while True:
+        elapsed = time.time() - start
+        if step_index < len(STEPS) and elapsed >= STEPS[step_index][0]:
+            _, action, label = STEPS[step_index]
+            print(f"[{int(elapsed):>3}s] {label}")
+            action()
+            step_index += 1
+        time.sleep(0.5)
+
+
+def _demo_set(panic=False, do_reset=False, new_mode=None):
+    """Apply a state change from the demo timeline (called inside demo_loop)."""
+    global emergency, reset, mode
+    with lock:
+        if panic:
+            emergency = True
+            reset = False
+        if do_reset:
+            emergency = False
+            reset = True
+        if new_mode:
+            mode = new_mode
+
+
 if __name__ == "__main__":
     print("Starting ResQNet Device Simulator")
     print(f"  Device ID : {DEVICE_ID}")
@@ -162,7 +228,11 @@ if __name__ == "__main__":
     # Fix 3.1: catch KeyboardInterrupt so Ctrl+C exits cleanly rather than
     # printing a traceback and leaving the backend with a dangling connection.
     try:
-        input_loop()
+        if args.demo:
+            # Fix 3.2: run the scripted scenario instead of waiting for keypresses
+            demo_loop()
+        else:
+            input_loop()
     except KeyboardInterrupt:
         print("\nSimulator stopped.")
         sys.exit(0)
