@@ -1,5 +1,6 @@
-const timeline = document.getElementById("timeline");
-const statusBox = document.getElementById("status");
+const timeline   = document.getElementById("timeline");
+const statusBox  = document.getElementById("status");
+const connMessage = document.getElementById("conn-message");
 
 // Fix 4.1: connection status dot elements
 const connDot   = document.getElementById("conn-dot");
@@ -37,7 +38,10 @@ function connect() {
 
   ws.onopen = () => {
     reconnectDelay = 1000;
-    statusBox.innerText = "WebSocket connected. Waiting for data...";
+    // Use connMessage — NOT statusBox.innerText — so we never wipe the
+    // child spans that handlePayload depends on.
+    connMessage.innerText   = "Connected. Waiting for device data…";
+    connMessage.style.display = "block";
     // Fix 4.1: show green dot on successful connection
     connDot.className   = "connected";
     connLabel.innerText = "Live";
@@ -56,13 +60,14 @@ function connect() {
 
   ws.onclose = () => {
     const seconds = Math.round(reconnectDelay / 1000);
-    statusBox.innerText = `Disconnected. Reconnecting in ${seconds}s…`;
+    connMessage.innerText     = `Disconnected. Reconnecting in ${seconds}s…`;
+    connMessage.style.display = "block";
     // Fix 4.1: red dot while disconnected
     connDot.className   = "disconnected";
     connLabel.innerText = `Reconnecting in ${seconds}s`;
 
     setTimeout(() => {
-      statusBox.innerText = "Reconnecting…";
+      connMessage.innerText   = "Reconnecting…";
       // Fix 4.1: amber dot while actively trying to reconnect
       connDot.className   = "reconnecting";
       connLabel.innerText = "Reconnecting…";
@@ -98,6 +103,9 @@ function playAlertSound() {
 
 function handlePayload(data) {
   console.log("WS DATA RECEIVED", data);
+
+  // Hide the "waiting" connection message the moment real data arrives
+  connMessage.style.display = "none";
 
   const { latitude, longitude, emergency, risk, context } = data;
 

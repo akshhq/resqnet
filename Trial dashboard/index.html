@@ -163,6 +163,15 @@
     <span id="conn-label">Connecting…</span>
   </div>
 
+  <!-- Connection state messages (separate from device status box so
+       innerText updates never wipe the status box child spans) -->
+  <div id="conn-message" style="
+    position:absolute; top:50px; left:10px;
+    background:white; padding:6px 10px; z-index:1000;
+    border-radius:4px; box-shadow:0 0 5px rgba(0,0,0,0.3);
+    font-size:13px; color:#6b7280;
+  ">Connecting to backend…</div>
+
   <!-- Status box — each field is a named span so JS never uses innerHTML -->
   <div class="status" id="status">
     <b>Device:</b> <span id="s-device">—</span><br/>
