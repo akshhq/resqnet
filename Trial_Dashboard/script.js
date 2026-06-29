@@ -116,15 +116,69 @@ let toastRunning = false;
 // ---------------------------------------------------------------------------
 // WebSocket
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// 5.2: API key — optional. Works with no key (dev mode).
+// To enable auth: set window.RESQNET_API_KEY before this script loads,
+// or enter it in the settings panel below. Leave blank to skip.
+// ---------------------------------------------------------------------------
+function _getApiKey() {
+  if (window.RESQNET_API_KEY) return window.RESQNET_API_KEY;
+  return sessionStorage.getItem("resqnet_api_key") || "";
+}
+
+function _setApiKey(k) {
+  sessionStorage.setItem("resqnet_api_key", k.trim());
+}
+
+// Returns fetch headers — empty object when no key is set
+function _authHeaders() {
+  const k = _getApiKey();
+  return k ? { "X-API-Key": k } : {};
+}
+
 const WS_URL = window.RESQNET_WS_URL ||
   `ws://${window.location.hostname}:8000/ws/live`;
+
+// Apply key from the UI panel and reconnect WebSocket
+function applyApiKey() {
+  const input = document.getElementById("key-input");
+  const k = input.value.trim();
+  _setApiKey(k);
+  input.value = "";
+  input.placeholder = k ? "key saved — click Apply to reconnect" : "leave blank if auth disabled";
+
+  // Close existing socket cleanly then reconnect with new token.
+  // Do NOT null out ws.onclose — let the close handler fire normally
+  // so the reconnect path runs via connect(). We just reset the delay.
+  reconnectDelay = 1000;
+  if (ws) {
+    ws.close();   // onclose fires → calls connect() with the new token
+  } else {
+    connect();
+  }
+  showToast(k ? "🔑 API key saved. Reconnecting…" : "🔓 Auth cleared. Reconnecting…");
+}
+
+// Pre-fill key input from storage on load
+window.addEventListener("load", () => {
+  const stored = sessionStorage.getItem("resqnet_api_key");
+  if (stored) {
+    const inp = document.getElementById("key-input");
+    if (inp) inp.placeholder = "key saved — click Apply to reconnect";
+  }
+});
+
+function _buildWsUrl() {
+  const key = _getApiKey();
+  return key ? `${WS_URL}?token=${encodeURIComponent(key)}` : WS_URL;
+}
 
 let ws = null;
 let reconnectDelay = 1000;
 const RECONNECT_MAX = 30000;
 
 function connect() {
-  ws = new WebSocket(WS_URL);
+  ws = new WebSocket(_buildWsUrl());
 
   ws.onopen = () => {
     reconnectDelay = 1000;
@@ -184,6 +238,7 @@ function playAlertSound() {
 // Main payload handler
 // ---------------------------------------------------------------------------
 function handlePayload(data) {
+  try {
   connMessage.style.display = "none";
 
   const { latitude, longitude, emergency, risk, context } = data;
@@ -326,6 +381,9 @@ function handlePayload(data) {
   // --- Auto-pan only when device leaves visible bounds ---
   const latLng = [latitude, longitude];
   if (!map.getBounds().contains(latLng)) map.setView(latLng, map.getZoom());
+  } catch (err) {
+    console.error("handlePayload crashed:", err, "\nData was:", JSON.stringify(data));
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -356,7 +414,8 @@ async function replay(deviceId) {
 
   // Fetch full history from backend
   const res     = await fetch(
-    `http://${window.location.hostname}:8000/device/${deviceId}/history`
+    `http://${window.location.hostname}:8000/device/${deviceId}/history`,
+    { headers: _authHeaders() }
   );
   const history = await res.json();
   if (!history.length) { showToast("No history found for that device."); return; }

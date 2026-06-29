@@ -1,7 +1,12 @@
+import os
 import time
 import requests
 
 URL = "http://127.0.0.1:8000/device/update"
+
+# 5.1: read API key from environment
+API_KEY = os.getenv("API_KEY", "")
+HEADERS = {"X-API-Key": API_KEY} if API_KEY else {}
 
 device_id = "LIVE_MAP"
 
@@ -24,7 +29,7 @@ for i in range(10):
 
     # FIX #10: error handling so the loop continues if the backend is down
     try:
-        res = requests.post(URL, json=payload, timeout=3)
+        res = requests.post(URL, json=payload, headers=HEADERS, timeout=3)
         print(res.json())
     except requests.exceptions.ConnectionError:
         print(f"[{i+1}/10] Backend unreachable — retrying next tick")

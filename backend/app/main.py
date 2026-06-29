@@ -2,16 +2,23 @@ import os
 from collections import deque
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from dotenv import load_dotenv
+load_dotenv()   # loads backend/.env if present — must run before os.getenv() calls
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from starlette.requests import Request
 
-from app.schemas import DeviceUpdate
-
+from app.schemas import DeviceUpdate, DeviceRegister
 from app.storage import (
     device_state,
     device_history,
     alert_state,
     escalation_state,
+    registered_devices,
     HISTORY_MAXLEN
 )
 from app.context import (
@@ -22,26 +29,57 @@ from app.context import (
     check_escalation
 )
 from app.websocket import ConnectionManager
+from app.auth import verify_api_key, verify_ws_token, rate_limit_exceeded_handler
 
 
-# FIX #7: lifespan replaces the deprecated @app.on_event("startup")
+# ---------------------------------------------------------------------------
+# Rate limiter (5.3)
+# ---------------------------------------------------------------------------
+
+limiter = Limiter(key_func=get_remote_address, default_limits=[])
+
+
+# ---------------------------------------------------------------------------
+# Lifespan
+# ---------------------------------------------------------------------------
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     device_state.clear()
     device_history.clear()
     alert_state.clear()
     escalation_state.clear()
-    print("🔄 Runtime state cleared")
+    registered_devices.clear()
+
+    api_key = os.getenv("API_KEY", "").strip()
+    print("=" * 52)
+    print("  ResQNet Backend v0.5")
+    print("=" * 52)
+    if api_key:
+        print(f"  Auth     : ENABLED  (API_KEY is set)")
+        print(f"  Key hint : ...{api_key[-6:]}")
+        print()
+        print("  Simulator must use:")
+        print("    python simulator.py --key <your_key>")
+        print("  OR set API_KEY in your terminal before running.")
+    else:
+        print("  Auth     : DISABLED (no API_KEY in .env)")
+        print("  All requests accepted — dev mode.")
+    print("=" * 52)
     yield
-    # (teardown logic can go here if needed in future)
 
 
-app = FastAPI(title="ResQNet Backend", version="0.4", lifespan=lifespan)
+# ---------------------------------------------------------------------------
+# App
+# ---------------------------------------------------------------------------
 
+app = FastAPI(title="ResQNet Backend", version="0.5", lifespan=lifespan)
 
-# FIX #12: CORS origins read from environment variable so they're easy to
-# change across dev / staging / production without touching source code.
-# Default covers local dev with Live Server.
+# Attach rate-limit exceeded handler
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+
+# CORS
 _raw_origins = os.getenv(
     "CORS_ORIGINS",
     "http://localhost:5500,http://127.0.0.1:5500"
@@ -59,9 +97,20 @@ app.add_middleware(
 manager = ConnectionManager()
 
 
+# ---------------------------------------------------------------------------
+# 5.2 — WebSocket endpoint with token auth
+# ---------------------------------------------------------------------------
+
 @app.websocket("/ws/live")
-async def websocket_endpoint(websocket: WebSocket):
-    await manager.connect(websocket)
+async def websocket_endpoint(websocket: WebSocket, token: str = ""):
+    # Must accept FIRST — you cannot close an unaccepted WebSocket.
+    # verify_ws_token sends the close frame after accept if token is invalid.
+    await websocket.accept()
+
+    if not await verify_ws_token(websocket, token):
+        return   # token invalid — already closed inside verify_ws_token
+
+    manager.active_connections.append(websocket)
     try:
         while True:
             await websocket.receive_text()
@@ -69,8 +118,57 @@ async def websocket_endpoint(websocket: WebSocket):
         manager.disconnect(websocket)
 
 
-@app.post("/device/update")
-async def device_update(data: DeviceUpdate):
+# ---------------------------------------------------------------------------
+# 5.4 — Device registration endpoint
+# ---------------------------------------------------------------------------
+
+@app.post(
+    "/device/register",
+    dependencies=[Depends(verify_api_key)],
+    summary="Register a device ID so it can send updates"
+)
+async def register_device(data: DeviceRegister):
+    """
+    Register a device before it can send updates.
+    Only registered device IDs are accepted at /device/update.
+
+    Request body:  { "device_id": "SIM_DEVICE_01" }
+    """
+    registered_devices.add(data.device_id)
+    print(f"✅ Device registered: {data.device_id}  (total: {len(registered_devices)})")
+    return {"registered": True, "device_id": data.device_id}
+
+
+@app.get(
+    "/device/registered",
+    dependencies=[Depends(verify_api_key)],
+    summary="List all registered device IDs"
+)
+def list_registered_devices():
+    return {"devices": sorted(registered_devices)}
+
+
+# ---------------------------------------------------------------------------
+# 5.1 + 5.3 — Device update (auth + rate limited)
+# ---------------------------------------------------------------------------
+
+@app.post(
+    "/device/update",
+    dependencies=[Depends(verify_api_key)],
+    summary="Receive a position + state update from a registered device"
+)
+@limiter.limit("60/minute")   # 5.3: max 1 update/second per IP
+async def device_update(request: Request, data: DeviceUpdate):
+    # 5.4: reject unregistered device IDs
+    if data.device_id not in registered_devices:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"Device '{data.device_id}' is not registered. "
+                "POST to /device/register first."
+            )
+        )
+
     prev = device_state.get(data.device_id, {})
     prev_speed = prev.get("speed", data.speed)
 
@@ -83,87 +181,63 @@ async def device_update(data: DeviceUpdate):
         was_reset = False
         emergency_locked = prev.get("emergency", False) or data.emergency
 
-    anomaly = detect_speed_anomaly(prev_speed, data.speed)
-    context = classify_context(data.speed)
-    risk = calculate_risk(emergency_locked, anomaly)
-
+    anomaly    = detect_speed_anomaly(prev_speed, data.speed)
+    context    = classify_context(data.speed)
+    risk       = calculate_risk(emergency_locked, anomaly)
     escalation = check_escalation(
-        data.device_id,
-        emergency_locked,
-        data.timestamp,
-        escalation_state
+        data.device_id, emergency_locked, data.timestamp, escalation_state
     )
 
     if escalation:
         print(f"🚨 ESCALATION | Device: {data.device_id} | Level: {escalation}")
 
     alert_triggered = False
-
     if should_alert(data.device_id, risk, data.timestamp, alert_state):
         alert_state[data.device_id] = data.timestamp
         alert_triggered = True
-        print(
-            f"🚨 ALERT | Device: {data.device_id} | Risk: {risk} | Time: {data.timestamp}"
-        )
+        print(f"🚨 ALERT | Device: {data.device_id} | Risk: {risk} | Time: {data.timestamp}")
 
     payload = {
-        "device_id": data.device_id,
-        "latitude": data.latitude,
-        "longitude": data.longitude,
-        "speed": data.speed,
-        "context": context,
-        "battery": data.battery,
-        "emergency": emergency_locked,
-        "risk": risk,
-        "timestamp": data.timestamp,
-        "alert": alert_triggered,
+        "device_id":  data.device_id,
+        "latitude":   data.latitude,
+        "longitude":  data.longitude,
+        "speed":      data.speed,
+        "context":    context,
+        "battery":    data.battery,
+        "emergency":  emergency_locked,
+        "risk":       risk,
+        "timestamp":  data.timestamp,
+        "alert":      alert_triggered,
         "escalation": escalation,
-        # Fix 1.1: explicit reset flag so dashboards can react to a reset event
-        # (e.g. clear escalation labels) rather than inferring it from
-        # emergency flipping to false.
-        "reset": was_reset
+        "reset":      was_reset,
     }
 
     device_state[data.device_id] = payload
 
-    # Fix 1.2: initialise history as a bounded deque so it never grows
-    # beyond HISTORY_MAXLEN entries per device, preventing silent RAM exhaustion.
     if data.device_id not in device_history:
         device_history[data.device_id] = deque(maxlen=HISTORY_MAXLEN)
-
     device_history[data.device_id].append(payload)
 
     await manager.broadcast(payload)
-
     return {"status": "broadcasted", "risk": risk}
 
 
-@app.get("/device/{device_id}")
+# ---------------------------------------------------------------------------
+# 5.1 — Read endpoints (auth protected)
+# ---------------------------------------------------------------------------
+
+@app.get(
+    "/device/{device_id}",
+    dependencies=[Depends(verify_api_key)]
+)
 def get_device(device_id: str):
     return device_state.get(device_id, {"error": "Device not found"})
 
 
-# FIX #2: History endpoint that replay() in script.js actually calls
-@app.get("/device/{device_id}/history")
-def get_device_history(device_id: str):
-    # deque is not JSON-serialisable directly — convert to list first.
+@app.get(
+    "/device/{device_id}/history",
+    dependencies=[Depends(verify_api_key)]
+)
+@limiter.limit("30/minute")   # 5.3: history fetches are heavier, lower cap
+def get_device_history(request: Request, device_id: str):
     return list(device_history.get(device_id, []))
-
-
-@app.get("/test/broadcast")
-async def test_broadcast():
-    test_payload = {
-        "device_id": "TEST",
-        "latitude": 28.61,
-        "longitude": 77.20,
-        "speed": 1.0,
-        "context": "walking",
-        "battery": 90,
-        "emergency": False,
-        "risk": "normal",
-        "timestamp": 1700000000,
-        "alert": False,
-        "escalation": None
-    }
-    await manager.broadcast(test_payload)
-    return {"sent": True}

@@ -4,12 +4,27 @@ Realistic human-movement model using heading + smoothed speed.
 """
 
 import math
+import os
 import random
 import requests
 import sys
 import argparse
 import threading
 import time
+
+# Auto-load backend/.env so the API key is always found,
+# even if the user didn't set the env var in this terminal.
+try:
+    from dotenv import load_dotenv
+    for _p in [
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'backend', '.env'),
+        os.path.join(os.getcwd(), 'backend', '.env'),
+    ]:
+        if os.path.exists(_p):
+            load_dotenv(_p)
+            break
+except ImportError:
+    pass  # dotenv not installed — relies on env var or --key flag
 
 # ---------------------------------------------------------------------------
 # CLI args
@@ -43,10 +58,19 @@ parser.add_argument(
     default=77.2090,
     help="Starting longitude (default: 77.2090 — New Delhi)"
 )
+parser.add_argument(
+    "--key",
+    default=os.getenv("API_KEY", ""),
+    help="API key for backend auth. Reads API_KEY env var if not set."
+)
 args = parser.parse_args()
 
 BACKEND_URL = args.url
 DEVICE_ID   = args.id
+API_KEY     = args.key
+
+# Header sent with every HTTP request (5.1)
+HEADERS = {"X-API-Key": API_KEY} if API_KEY else {}
 
 # ---------------------------------------------------------------------------
 # Movement model constants
@@ -189,7 +213,7 @@ def send_loop():
             }
 
         try:
-            r = requests.post(BACKEND_URL, json=payload, timeout=2)
+            r = requests.post(BACKEND_URL, json=payload, headers=HEADERS, timeout=2)
             _log(f"speed={actual_speed:.2f} m/s  heading={heading:.0f}°  "
                  f"mode={mode}  bat={round(battery)}%  "
                  f"em={emergency}  → {r.status_code}")
@@ -355,7 +379,24 @@ if __name__ == "__main__":
     print(f"  Device ID  : {DEVICE_ID}")
     print(f"  Backend    : {BACKEND_URL}")
     print(f"  Start pos  : {args.lat}, {args.lng}")
+    print(f"  Auth       : {'API key set' if API_KEY else 'NO KEY — backend must have auth disabled'}")
     print(f"  Mode       : {'DEMO' if args.demo else 'INTERACTIVE'}\n")
+
+    # 5.4: auto-register this device before the send loop starts
+    _register_url = BACKEND_URL.replace("/device/update", "/device/register")
+    try:
+        reg = requests.post(
+            _register_url,
+            json={"device_id": DEVICE_ID},
+            headers=HEADERS,
+            timeout=5
+        )
+        if reg.status_code == 200:
+            print(f"✅ Device registered: {DEVICE_ID}")
+        else:
+            print(f"⚠️  Registration returned {reg.status_code}: {reg.text}")
+    except Exception as e:
+        print(f"⚠️  Could not register device (backend down?): {e}")
 
     threading.Thread(target=send_loop, daemon=True).start()
 
