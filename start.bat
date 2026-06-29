@@ -49,7 +49,7 @@ if not exist "%ROOT%\Trial_Dashboard\index.html" (
 
 :: ── Backend ───────────────────────────────────────────────────────────────────
 echo [resqnet] Starting backend  ^> http://127.0.0.1:8000
-start "ResQNet Backend" cmd /k "cd /d "%ROOT%\backend" & uvicorn app.main:app --host 127.0.0.1 --port 8000"
+start "ResQNet Backend" cmd /k "cd /d "%ROOT%\backend" & uvicorn app.main:app --host 0.0.0.0 --port 8000"
 
 echo [resqnet] Waiting for backend to start...
 timeout /t 4 /nobreak >nul

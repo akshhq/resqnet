@@ -136,8 +136,10 @@ function _authHeaders() {
   return k ? { "X-API-Key": k } : {};
 }
 
-const WS_URL = window.RESQNET_WS_URL ||
-  `ws://${window.location.hostname}:8000/ws/live`;
+// Use 127.0.0.1 explicitly — NOT window.location.hostname.
+// On Windows with IPv6, "localhost" resolves to ::1 (IPv6 loopback)
+// but uvicorn binds to 127.0.0.1 (IPv4), causing silent WS connection refusal.
+const WS_URL = window.RESQNET_WS_URL || "ws://127.0.0.1:8000/ws/live";
 
 // Apply key from the UI panel and reconnect WebSocket
 function applyApiKey() {
@@ -414,7 +416,7 @@ async function replay(deviceId) {
 
   // Fetch full history from backend
   const res     = await fetch(
-    `http://${window.location.hostname}:8000/device/${deviceId}/history`,
+    `http://127.0.0.1:8000/device/${deviceId}/history`,
     { headers: _authHeaders() }
   );
   const history = await res.json();
