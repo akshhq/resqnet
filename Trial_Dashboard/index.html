@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ResQNet Live Dashboard</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+
+  <style>
+    /* ── Base ── */
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: transparent;
+    }
+
+    #map { height: 100vh; width: 100%; }
+
+    /* ── Shared panel style ── */
+    .panel {
+      position: absolute;
+      background: white;
+      padding: 10px;
+      z-index: 1000;
+      border-radius: 6px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+      font-size: 13px;
+    }
+
+    /* ── Status box ── */
+    #status { top: 10px; left: 10px; font-size: 14px; min-width: 170px; }
+
+    /* ── Connection message ── */
+    #conn-message {
+      top: 10px; left: 10px;
+      color: #6b7280;
+      font-size: 13px;
+    }
+
+    /* ── Timeline ── */
+    .timeline {
+      top: 220px; left: 10px;
+      max-height: 180px;
+      overflow-y: auto;
+    }
+    .timeline ul { margin: 4px 0 0; padding: 0 0 0 16px; }
+    .timeline li { margin-bottom: 3px; cursor: default; }
+
+    /* ── Replay panel ── */
+    #replay-panel {
+      top: 430px; left: 10px;
+      display: flex; gap: 6px; align-items: center;
+    }
+    #replay-panel input {
+      border: 1px solid #d1d5db; border-radius: 3px;
+      padding: 4px 7px; font-size: 13px; width: 130px;
+    }
+    #replay-panel button {
+      padding: 4px 10px; font-size: 13px;
+      border: none; border-radius: 3px;
+      background: #3b82f6; color: white; cursor: pointer;
+    }
+    #replay-panel button:hover { background: #2563eb; }
+
+    /* ── Connection dot (top-right) ── */
+    #conn-status {
+      position: absolute; top: 10px; right: 10px;
+      background: white; padding: 7px 12px; z-index: 1000;
+      border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+      font-size: 13px; display: flex; align-items: center; gap: 7px;
+    }
+    #conn-dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: #aaa; flex-shrink: 0;
+    }
+    #conn-dot.connected    { background: #22c55e; }
+    #conn-dot.disconnected { background: #ef4444; }
+    #conn-dot.reconnecting { background: #f59e0b; }
+
+    /* ── Dark mode button ── */
+    #dark-btn {
+      position: absolute; top: 52px; right: 10px;
+      z-index: 1000; padding: 6px 12px;
+      background: white; border: none; border-radius: 6px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+      font-size: 13px; cursor: pointer;
+    }
+    #dark-btn:hover { background: #f3f4f6; }
+
+    /* ── Trail legend ── */
+    #trail-legend {
+      position: absolute; bottom: 30px; left: 10px;
+      z-index: 1000; background: white;
+      padding: 8px 12px; border-radius: 6px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+      font-size: 12px; display: none;
+    }
+    #trail-legend.visible { display: block; }
+    .legend-row { display: flex; align-items: center; gap: 8px; margin: 3px 0; }
+    .legend-dot {
+      width: 28px; height: 4px; border-radius: 2px; flex-shrink: 0;
+    }
+
+    /* ── Battery bar ── */
+    #battery-bar-wrap {
+      margin-top: 6px; background: #e5e7eb;
+      border-radius: 3px; height: 8px; overflow: hidden;
+    }
+    #battery-bar {
+      height: 100%; width: 100%; background: #22c55e;
+      transition: width 0.4s, background 0.4s; border-radius: 3px;
+    }
+
+    /* ── Toast ── */
+    #toast {
+      position: fixed; bottom: 20px; right: 20px;
+      background: #111; color: #fff;
+      padding: 12px 16px; border-radius: 6px;
+      opacity: 0; transition: opacity 0.4s;
+      z-index: 2000; font-size: 14px;
+    }
+    #toast.show { opacity: 1; }
+
+    /* ════════════════════════════════
+       Dark mode overrides
+    ════════════════════════════════ */
+    body.dark .panel,
+    body.dark #conn-status,
+    body.dark #dark-btn,
+    body.dark #trail-legend,
+    body.dark #conn-message {
+      background: #1e2433;
+      color: #e2e8f0;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.6);
+    }
+    body.dark #replay-panel input {
+      background: #2d3748; color: #e2e8f0;
+      border-color: #4a5568;
+    }
+    body.dark #dark-btn:hover { background: #2d3748; }
+    body.dark #battery-bar-wrap { background: #4a5568; }
+    body.dark #toast { background: #e2e8f0; color: #111; }
+    body.dark .timeline li { color: #cbd5e0; }
+  </style>
+</head>
+
+<body>
+  <div id="toast"></div>
+
+  <!-- Connection status dot -->
+  <div id="conn-status">
+    <div id="conn-dot"></div>
+    <span id="conn-label">Connecting…</span>
+  </div>
+
+  <!-- Dark mode toggle -->
+  <button id="dark-btn" onclick="toggleDarkMode()">🌙 Dark Mode</button>
+
+  <!-- Connection message (never inside status box) -->
+  <div id="conn-message" class="panel">Connecting to backend…</div>
+
+  <!-- Device status box -->
+  <div class="panel" id="status">
+    <b>Device:</b> <span id="s-device">—</span><br/>
+    <b>Context:</b> <span id="s-context">—</span><br/>
+    <b>Risk:</b> <span id="s-risk">—</span><br/>
+    <b>Emergency:</b> <span id="s-emergency">—</span>
+    <div id="s-esc-row" style="display:none;">
+      <b>Escalation:</b> <span id="s-escalation"></span>
+    </div>
+    <div id="s-reset-row" style="display:none; color:#16a34a;">✅ Reset</div>
+    <div id="battery-bar-wrap" style="display:none; margin-top:6px;">
+      <div id="battery-bar"></div>
+    </div>
+    <div id="battery-text" style="font-size:12px; margin-top:3px; display:none;"></div>
+  </div>
+
+  <!-- Timeline -->
+  <div class="panel timeline">
+    <b>Timeline</b>
+    <ul id="timeline"></ul>
+  </div>
+
+  <!-- Replay panel -->
+  <div id="replay-panel" class="panel">
+    <b>Replay:</b>
+    <input id="replay-id" placeholder="Device ID" />
+    <button onclick="replay(document.getElementById('replay-id').value)">▶ Play</button>
+  </div>
+
+  <!-- Trail legend — shown only when a trail is active -->
+  <div id="trail-legend">
+    <b>Path</b>
+    <div class="legend-row">
+      <div class="legend-dot" style="background:#00aaff;"></div> Pre-emergency (5 min)
+    </div>
+    <div class="legend-row">
+      <div class="legend-dot" style="background:#ff9900;"></div> Elevated risk
+    </div>
+    <div class="legend-row">
+      <div class="legend-dot" style="background:#ff2222;"></div> Critical / Emergency
+    </div>
+  </div>
+
+  <!-- Map -->
+  <div id="map"></div>
+
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script src="script.js"></script>
+</body>
+</html>
