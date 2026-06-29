@@ -1,4 +1,82 @@
+# ─────────────────────────────────────────
+# ResQNet — .gitignore
+# Stack: Python (FastAPI) + Vanilla JS + Leaflet (CDN)
+# ─────────────────────────────────────────
+
+
+# ── Python ────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+
+# pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# mypy / ruff / black caches
+.mypy_cache/
+.ruff_cache/
+
+
+# ── Environment & secrets ─────────────────
+# Never commit API keys, credentials, or local config
+.env
+.env.*
+!.env.example
+
+
+# ── Logs ─────────────────────────────────
+*.log
+logs/
+
+
+# ── Database files ────────────────────────
+# Will exist once persistent storage is added (Section 6)
+*.db
+*.sqlite
+*.sqlite3
+
+
+# ── OS files ──────────────────────────────
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+
+
+# ── Editors & IDEs ───────────────────────
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+*.swp
+*.swo
+
+
+
+# ── Node (not used yet, but safe to have) ─
+node_modules/
+npm-debug.log*
+
 Hardware.md
 improvements.md
 TODO.md
-.vscode
