@@ -30,6 +30,7 @@ from app.context import (
 )
 from app.websocket import ConnectionManager
 from app.auth import verify_api_key, verify_ws_token, rate_limit_exceeded_handler
+from app import db
 
 
 # ---------------------------------------------------------------------------
@@ -53,7 +54,7 @@ async def lifespan(app: FastAPI):
 
     api_key = os.getenv("API_KEY", "").strip()
     print("=" * 52)
-    print("  ResQNet Backend v0.5")
+    print("  ResQNet Backend v0.6")
     print("=" * 52)
     if api_key:
         print(f"  Auth     : ENABLED  (API_KEY is set)")
@@ -65,8 +66,11 @@ async def lifespan(app: FastAPI):
     else:
         print("  Auth     : DISABLED (no API_KEY in .env)")
         print("  All requests accepted — dev mode.")
+
+    await db.init_db()
     print("=" * 52)
     yield
+    await db.close_db()
 
 
 # ---------------------------------------------------------------------------
@@ -135,6 +139,11 @@ async def register_device(data: DeviceRegister):
     Request body:  { "device_id": "SIM_DEVICE_01" }
     """
     registered_devices.add(data.device_id)
+
+    # Provision this device's Postgres circular-buffer log table now,
+    # per spec: table creation happens at registration, not lazily.
+    await db.ensure_device_table(data.device_id)
+
     print(f"✅ Device registered: {data.device_id}  (total: {len(registered_devices)})")
     return {"registered": True, "device_id": data.device_id}
 
@@ -217,6 +226,39 @@ async def device_update(request: Request, data: DeviceUpdate):
     if data.device_id not in device_history:
         device_history[data.device_id] = deque(maxlen=HISTORY_MAXLEN)
     device_history[data.device_id].append(payload)
+
+    # ── Postgres logging ──────────────────────────────────────────────────
+    # 1. Every tick always goes into the device's normal circular-buffer
+    #    table (500-row cap, enqueue+dequeue once full).
+    # 2. If this tick is part of an active emergency, it ALSO gets appended
+    #    to that emergency's dedicated table (uncapped).
+    # 3. Emergency start (False→True transition): create the emergency
+    #    table, pre-seed it with 5 min of pre-trigger context.
+    # 4. Emergency end (reset): mark the emergency table closed with an
+    #    end timestamp. The table itself is never deleted.
+    await db.insert_normal_log(data.device_id, payload)
+
+    was_emergency_before = prev.get("emergency", False)
+
+    if emergency_locked and not was_emergency_before:
+        # Emergency just started this tick
+        em_id = await db.start_emergency_log(data.device_id, data.timestamp)
+        await db.append_emergency_log(data.device_id, em_id, payload)
+
+    elif emergency_locked and was_emergency_before:
+        # Emergency continuing — append this tick to the active emergency table
+        active_em_id = await db.get_active_emergency_id(data.device_id)
+        if active_em_id:
+            await db.append_emergency_log(data.device_id, active_em_id, payload)
+
+    elif was_reset and was_emergency_before:
+        # Emergency just ended — close out the registry entry.
+        # The final tick itself was already an "emergency" tick a moment ago
+        # (was_emergency_before=True), so log this reset tick too before closing.
+        active_em_id = await db.get_active_emergency_id(data.device_id)
+        if active_em_id:
+            await db.append_emergency_log(data.device_id, active_em_id, payload)
+            await db.close_emergency_log(data.device_id, active_em_id, data.timestamp)
 
     await manager.broadcast(payload)
     return {"status": "broadcasted", "risk": risk}
