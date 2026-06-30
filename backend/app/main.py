@@ -31,6 +31,8 @@ from app.context import (
 from app.websocket import ConnectionManager
 from app.auth import verify_api_key, verify_ws_token, rate_limit_exceeded_handler
 from app import db
+from app import user_db
+from app.user_routes import router as user_router
 
 
 # ---------------------------------------------------------------------------
@@ -68,6 +70,7 @@ async def lifespan(app: FastAPI):
         print("  All requests accepted — dev mode.")
 
     await db.init_db()
+    await user_db.init_user_tables()
     print("=" * 52)
     yield
     await db.close_db()
@@ -99,6 +102,9 @@ app.add_middleware(
 )
 
 manager = ConnectionManager()
+
+# User Dashboard routes (registration, OTP, contacts, devices, preferences, incidents)
+app.include_router(user_router)
 
 
 # ---------------------------------------------------------------------------
@@ -237,6 +243,18 @@ async def device_update(request: Request, data: DeviceUpdate):
     # 4. Emergency end (reset): mark the emergency table closed with an
     #    end timestamp. The table itself is never deleted.
     await db.insert_normal_log(data.device_id, payload)
+
+    # Keep the user-facing `devices` table in sync with live broadcast data,
+    # so the User Dashboard's device list shows real-time battery/status
+    # without needing a separate polling endpoint.
+    if db.db_enabled():
+        device_status = "emergency" if emergency_locked else "online"
+        await user_db.update_device_status(
+            data.device_id,
+            battery=data.battery,
+            last_seen=data.timestamp,
+            status=device_status,
+        )
 
     was_emergency_before = prev.get("emergency", False)
 
