@@ -1,196 +1,607 @@
-const timeline    = document.getElementById("timeline");
-const statusBox   = document.getElementById("status");
-const connMessage = document.getElementById("conn-message");
-const connDot     = document.getElementById("conn-dot");
-const connLabel   = document.getElementById("conn-label");
+// ─────────────────────────────────────────────────────────────────────────────
+// ResQNet Dashboard + Integrated Simulator
+// All simulation runs in the browser. No Python simulator needed.
+// ─────────────────────────────────────────────────────────────────────────────
 
-// ---------------------------------------------------------------------------
-// Map setup — two tile layers for light/dark mode
-// ---------------------------------------------------------------------------
-const map = L.map("map").setView([28.61, 77.20], 15);
+const BACKEND = "http://127.0.0.1:8000";
+const WS_URL  = window.RESQNET_WS_URL || "ws://127.0.0.1:8000/ws/live";
 
-const tileLayers = {
-  light: L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    attribution: "© OpenStreetMap"
-  }),
-  dark: L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
-    attribution: "© OpenStreetMap © CARTO"
-  })
+// ── Auth ─────────────────────────────────────────────────────────────────────
+function _getApiKey() {
+  return window.RESQNET_API_KEY || sessionStorage.getItem("resqnet_api_key") || "";
+}
+function _authHeaders() {
+  const k = _getApiKey();
+  return k ? { "X-API-Key": k, "Content-Type": "application/json" }
+           : { "Content-Type": "application/json" };
+}
+
+// ── Map ───────────────────────────────────────────────────────────────────────
+const map = L.map("map", { zoomControl: true }).setView([28.6139, 77.2090], 14);
+
+const TILES = {
+  dark:  L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+           { attribution: "© OpenStreetMap © CARTO" }),
+  light: L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+           { attribution: "© OpenStreetMap" }),
 };
-tileLayers.light.addTo(map);
-let darkMode = false;
+TILES.dark.addTo(map);
+let darkTheme = true;
 
-function toggleDarkMode() {
-  darkMode = !darkMode;
-  if (darkMode) {
-    tileLayers.light.remove();
-    tileLayers.dark.addTo(map);
-    document.body.classList.add("dark");
+function toggleTheme() {
+  darkTheme = !darkTheme;
+  if (darkTheme) {
+    TILES.light.remove(); TILES.dark.addTo(map);
+    document.body.classList.remove("light");
     document.getElementById("dark-btn").innerText = "☀ Light Mode";
   } else {
-    tileLayers.dark.remove();
-    tileLayers.light.addTo(map);
-    document.body.classList.remove("dark");
+    TILES.dark.remove(); TILES.light.addTo(map);
+    document.body.classList.add("light");
     document.getElementById("dark-btn").innerText = "🌙 Dark Mode";
   }
 }
 
-// ---------------------------------------------------------------------------
-// Trail colours — bright so they're visible on both light and dark tiles
-// ---------------------------------------------------------------------------
-const TRAIL_COLORS = {
-  normal:   "#00aaff",   // bright blue
-  elevated: "#ff9900",   // bright orange
-  critical: "#ff2222",   // bright red
+// ── Simulator constants (mirrors Python simulator) ────────────────────────────
+const M_PER_DEG_LAT = 111000;
+const SPEED_PROFILES = {
+  stationary: { mean: 0.0,  std: 0.05, min: 0.0, max: 0.1  },
+  walking:    { mean: 1.2,  std: 0.25, min: 0.4, max: 1.8  },
+  running:    { mean: 3.0,  std: 0.40, min: 1.8, max: 4.0  },
+  vehicle:    { mean: 11.0, std: 2.00, min: 5.0, max: 16.7 },
 };
-const TRAIL_WEIGHT  = 4;
-const TRAIL_OPACITY = 0.95;
+const TURN_RATE = { stationary: 30, walking: 12, running: 8, vehicle: 4 };
+const PAUSE_CHANCE = { stationary: 0, walking: 0.03, running: 0.005, vehicle: 0 };
 
-// ---------------------------------------------------------------------------
-// Trail state
-// ---------------------------------------------------------------------------
-// activeTrailLayers: all polyline segments currently on the map (live mode)
-// replayTrailLayers: polylines drawn during replay (cleared when replay ends)
-let activeTrailLayers = [];
-let replayTrailLayers = [];
+function gauss(mean, std) {
+  // Box-Muller transform
+  const u = 1 - Math.random(), v = Math.random();
+  return mean + std * Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
-// Per-device position history: device_id → [{lat, lng, risk, timestamp}, ...]
-// Kept in JS so we can extract the 5-min pre-emergency window without a fetch.
-const positionHistory = {};
-const HISTORY_WINDOW  = 5 * 60;   // 5 minutes in seconds
+// ── Device registry ───────────────────────────────────────────────────────────
+// devices: Map<device_id, DeviceState>
+const devices = new Map();
+let selectedDeviceId = null;
+let deviceCounter = 0;
 
-// Whether an emergency is currently active (controls whether trail is shown)
-let emergencyActive = false;
-// Timestamp when emergency started (to anchor the 5-min lookback)
-let emergencyStartTs = null;
+const TRAIL_COLORS = { normal: "#00aaff", elevated: "#ff9900", critical: "#ff2222" };
 
-// Whether replay is running (suppresses live trail drawing)
-let replayRunning = false;
-
-function clearTrailLayers(layerArray) {
-  layerArray.forEach(l => map.removeLayer(l));
-  layerArray.length = 0;
-  // Hide legend if no trails remain on map
-  if (activeTrailLayers.length === 0 && replayTrailLayers.length === 0) {
-    document.getElementById("trail-legend").classList.remove("visible");
-  }
+function makeDeviceState(id, name, lat, lng, mode, isLocal = true) {
+  return {
+    id, name,
+    lat, lng,
+    heading: Math.random() * 360,
+    speedSmooth: SPEED_PROFILES[mode].mean,
+    mode,
+    emergency: false,
+    battery: 100.0,
+    lowBatteryWarned: false,
+    paused: false,
+    pauseTicks: 0,
+    risk: "normal",
+    context: "walking",
+    escalationStart: null,
+    escalationLevel: 0,
+    intervalId: null,
+    tick: 0,
+    // isLocal = true  → this browser tab owns the simulation loop (Add Device button)
+    // isLocal = false → driven entirely by backend broadcasts (Python simulator,
+    //                    send_updates.py, or a device added in another browser tab)
+    isLocal,
+    // Map objects
+    marker: null,
+    trailLayers: [],
+    lastRisk: "normal",
+    // Log entries for this device
+    logs: [],
+  };
 }
 
-// Draw a list of {lat, lng, risk} points as coloured polyline segments on map.
-// Returns the created layers so caller can track them.
-function drawTrailFromPoints(points) {
-  const layers = [];
-  if (points.length < 2) return layers;
+// ── Movement engine ───────────────────────────────────────────────────────────
+function moveTick(dev) {
+  const mPerDegLng = M_PER_DEG_LAT * Math.cos(dev.lat * Math.PI / 180);
 
-  let segStart = 0;
-  for (let i = 1; i <= points.length; i++) {
-    const riskChanged = i === points.length || points[i].risk !== points[i - 1].risk;
-    if (riskChanged) {
-      const seg   = points.slice(segStart, i);
-      const color = TRAIL_COLORS[seg[0].risk] || TRAIL_COLORS.normal;
-      const latlngs = seg.map(p => [p.lat, p.lng]);
-      const poly = L.polyline(latlngs, {
-        color, weight: TRAIL_WEIGHT, opacity: TRAIL_OPACITY
-      }).addTo(map);
-      layers.push(poly);
-      segStart = i - 1;
+  if (dev.paused) {
+    dev.pauseTicks--;
+    if (dev.pauseTicks <= 0) dev.paused = false;
+    dev.lat += gauss(0, 0.000003);
+    dev.lng += gauss(0, 0.000003);
+    return 0.05;
+  }
+
+  if (Math.random() < (PAUSE_CHANCE[dev.mode] || 0)) {
+    dev.paused = true;
+    dev.pauseTicks = 2 + Math.floor(Math.random() * 7);
+    return 0.0;
+  }
+
+  // Heading drift
+  dev.heading = (dev.heading + gauss(0, TURN_RATE[dev.mode] || 10)) % 360;
+  if (dev.heading < 0) dev.heading += 360;
+
+  // Speed lerp
+  const p = SPEED_PROFILES[dev.mode];
+  const target = clamp(gauss(p.mean, p.std), p.min, p.max);
+  dev.speedSmooth += (target - dev.speedSmooth) * 0.25;
+
+  const rad = dev.heading * Math.PI / 180;
+  const dlat = (dev.speedSmooth * Math.cos(rad)) / M_PER_DEG_LAT;
+  const dlng = (dev.speedSmooth * Math.sin(rad)) / mPerDegLng;
+
+  dev.lat += dlat + gauss(0, 0.000004);
+  dev.lng += dlng + gauss(0, 0.000004);
+
+  // Clamp to valid coords
+  dev.lat = clamp(dev.lat, -89.9, 89.9);
+  dev.lng = clamp(dev.lng, -179.9, 179.9);
+
+  return Math.round(dev.speedSmooth * 1000) / 1000;
+}
+
+// ── Context + risk classification ─────────────────────────────────────────────
+function classifyContext(speed) {
+  if (speed < 0.3) return "stationary";
+  if (speed < 1.5) return "walking";
+  if (speed < 3.5) return "running";
+  return "vehicle";
+}
+
+function calculateRisk(emergency, prevSpeed, currSpeed) {
+  if (emergency) return "critical";
+  if (Math.abs(currSpeed - prevSpeed) > 5.0) return "elevated";
+  return "normal";
+}
+
+// ── Escalation (mirrors Python backend logic) ─────────────────────────────────
+const ESCALATION_STEPS = [[30, "escalated"], [90, "critical"]];
+
+function checkEscalation(dev, emergency, timestamp) {
+  if (!emergency) {
+    dev.escalationStart = null;
+    dev.escalationLevel = 0;
+    return null;
+  }
+  if (dev.escalationStart === null) {
+    dev.escalationStart = timestamp;
+    dev.escalationLevel = 0;
+    return null;
+  }
+  const elapsed = timestamp - dev.escalationStart;
+  let fired = null;
+  for (let i = 0; i < ESCALATION_STEPS.length; i++) {
+    const [threshold, label] = ESCALATION_STEPS[i];
+    if (elapsed >= threshold && dev.escalationLevel < i + 1) {
+      dev.escalationLevel = i + 1;
+      fired = label;
     }
   }
-  // Show legend whenever a trail is drawn
-  document.getElementById("trail-legend").classList.add("visible");
-  return layers;
+  return fired;
 }
 
-// ---------------------------------------------------------------------------
-// Marker
-// ---------------------------------------------------------------------------
-let marker       = null;
-let blinkInterval = null;
-
-// ---------------------------------------------------------------------------
-// Toast
-// ---------------------------------------------------------------------------
-let toastQueue  = [];
-let toastRunning = false;
-
-// ---------------------------------------------------------------------------
-// WebSocket
-// ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
-// 5.2: API key — optional. Works with no key (dev mode).
-// To enable auth: set window.RESQNET_API_KEY before this script loads,
-// or enter it in the settings panel below. Leave blank to skip.
-// ---------------------------------------------------------------------------
-function _getApiKey() {
-  if (window.RESQNET_API_KEY) return window.RESQNET_API_KEY;
-  return sessionStorage.getItem("resqnet_api_key") || "";
+// ── POST to backend ───────────────────────────────────────────────────────────
+async function postUpdate(payload) {
+  try {
+    const r = await fetch(`${BACKEND}/device/update`, {
+      method: "POST",
+      headers: _authHeaders(),
+      body: JSON.stringify(payload),
+    });
+    return r.ok;
+  } catch { return false; }
 }
 
-function _setApiKey(k) {
-  sessionStorage.setItem("resqnet_api_key", k.trim());
+async function registerDevice(id) {
+  try {
+    await fetch(`${BACKEND}/device/register`, {
+      method: "POST",
+      headers: _authHeaders(),
+      body: JSON.stringify({ device_id: id }),
+    });
+  } catch { /* backend might be down */ }
 }
 
-// Returns fetch headers — empty object when no key is set
-function _authHeaders() {
-  const k = _getApiKey();
-  return k ? { "X-API-Key": k } : {};
+// ── Per-device tick ───────────────────────────────────────────────────────────
+function deviceTick(dev) {
+  dev.tick++;
+  const ts = Math.floor(Date.now() / 1000);
+  const prevSpeed = dev.speedSmooth;
+  const speed = moveTick(dev);
+
+  dev.context = classifyContext(speed);
+  dev.risk    = calculateRisk(dev.emergency, prevSpeed, speed);
+
+  const battery = Math.max(0, dev.battery - 0.05);
+  dev.battery = battery;
+  if (battery <= 20 && !dev.lowBatteryWarned) {
+    dev.lowBatteryWarned = true;
+    appendLog(dev, `⚠ LOW BATTERY: ${Math.round(battery)}%`, "log-emergency");
+  }
+
+  const escalation = checkEscalation(dev, dev.emergency, ts);
+  if (escalation) {
+    appendLog(dev, `🚨 ESCALATION: ${escalation.toUpperCase()}`, "log-escalation");
+    playAlertSound();
+  }
+
+  const payload = {
+    device_id:  dev.id,
+    timestamp:  ts,
+    latitude:   Math.round(dev.lat * 1e7) / 1e7,
+    longitude:  Math.round(dev.lng * 1e7) / 1e7,
+    speed:      speed,
+    battery:    Math.round(battery),
+    emergency:  dev.emergency,
+    reset:      false,
+  };
+
+  postUpdate(payload);
+  updateDeviceMap(dev, speed);
+  updateDeviceCard(dev, speed);
+
+  // Log entry for selected device
+  const entry = `${new Date(ts * 1000).toLocaleTimeString()} · ${dev.context} · ${speed.toFixed(2)}m/s · bat:${Math.round(battery)}%` +
+    (dev.emergency ? " · 🚨 EMERGENCY" : "");
+  appendLog(dev, entry, dev.emergency ? "log-emergency" : "");
 }
 
-// Use 127.0.0.1 explicitly — NOT window.location.hostname.
-// On Windows with IPv6, "localhost" resolves to ::1 (IPv6 loopback)
-// but uvicorn binds to 127.0.0.1 (IPv4), causing silent WS connection refusal.
-const WS_URL = window.RESQNET_WS_URL || "ws://127.0.0.1:8000/ws/live";
+// ── Map updates ───────────────────────────────────────────────────────────────
+function updateDeviceMap(dev, speed) {
+  const pos  = [dev.lat, dev.lng];
+  const color = dev.emergency ? "#ff2222"
+              : dev.risk === "elevated" ? "#ff9900" : "#22c55e";
 
-// Apply key from the UI panel and reconnect WebSocket
-function applyApiKey() {
-  const input = document.getElementById("key-input");
-  const k = input.value.trim();
-  _setApiKey(k);
-  input.value = "";
-  input.placeholder = k ? "key saved — click Apply to reconnect" : "leave blank if auth disabled";
-
-  // Close existing socket cleanly then reconnect with new token.
-  // Do NOT null out ws.onclose — let the close handler fire normally
-  // so the reconnect path runs via connect(). We just reset the delay.
-  reconnectDelay = 1000;
-  if (ws) {
-    ws.close();   // onclose fires → calls connect() with the new token
+  if (!dev.marker) {
+    dev.marker = L.circleMarker(pos, {
+      radius: 9, color, fillColor: color, fillOpacity: 0.9, weight: 2
+    }).addTo(map);
+    dev.marker.bindTooltip(dev.name, { permanent: false, direction: "top" });
   } else {
-    connect();
+    dev.marker.setLatLng(pos);
+    dev.marker.setStyle({ color, fillColor: color });
   }
-  showToast(k ? "🔑 API key saved. Reconnecting…" : "🔓 Auth cleared. Reconnecting…");
+
+  // Trail — only during emergency
+  if (dev.emergency) {
+    const trailColor = TRAIL_COLORS[dev.risk] || TRAIL_COLORS.normal;
+    if (dev.trailLayers.length === 0 || dev.lastRisk !== dev.risk) {
+      const poly = L.polyline([pos], { color: trailColor, weight: 4, opacity: 0.95 }).addTo(map);
+      dev.trailLayers.push(poly);
+      dev.lastRisk = dev.risk;
+    } else {
+      dev.trailLayers[dev.trailLayers.length - 1].addLatLng(pos);
+    }
+  }
+
+  // Pan map if this is the selected device and it leaves view
+  if (dev.id === selectedDeviceId && !map.getBounds().contains(pos)) {
+    map.panTo(pos);
+  }
 }
 
-// Pre-fill key input from storage on load
-window.addEventListener("load", () => {
-  const stored = sessionStorage.getItem("resqnet_api_key");
-  if (stored) {
-    const inp = document.getElementById("key-input");
-    if (inp) inp.placeholder = "key saved — click Apply to reconnect";
+// ── Device card DOM ───────────────────────────────────────────────────────────
+function updateDeviceCard(dev, speed) {
+  const card = document.getElementById(`card-${dev.id}`);
+  if (!card) return;
+
+  const dot = card.querySelector(".device-status-dot");
+  dot.className = "device-status-dot" +
+    (dev.emergency ? " emergency" : dev.paused ? " paused" : "");
+
+  card.querySelector(".stat-speed").textContent = `${speed.toFixed(1)} m/s`;
+  card.querySelector(".stat-ctx").textContent   = dev.context;
+  card.querySelector(".stat-bat").textContent   = `🔋 ${Math.round(dev.battery)}%`;
+
+  const riskPill = card.querySelector(".stat-risk");
+  riskPill.textContent = dev.risk;
+  riskPill.className   = `stat-pill stat-risk risk-${dev.risk}`;
+
+  const panicBtn = card.querySelector(".ctrl-btn.panic");
+  panicBtn.classList.toggle("active", dev.emergency);
+}
+
+function renderDeviceCard(dev) {
+  const div = document.createElement("div");
+  div.className = "device-card" + (dev.id === selectedDeviceId ? " selected" : "");
+  div.id = `card-${dev.id}`;
+  div.onclick = (e) => {
+    if (e.target.closest("button, select")) return;
+    selectDevice(dev.id);
+  };
+
+  div.innerHTML = `
+    <div class="device-card-top">
+      <div class="device-status-dot"></div>
+      <span class="device-name" title="${dev.id}">${dev.name}</span>
+      <button class="device-remove-btn" onclick="removeDevice('${dev.id}')" title="Remove">✕</button>
+    </div>
+    <div class="device-card-stats">
+      <span class="stat-pill stat-speed">0.0 m/s</span>
+      <span class="stat-pill stat-ctx">${dev.mode}</span>
+      <span class="stat-pill stat-risk risk-normal">normal</span>
+      <span class="stat-pill stat-bat">🔋 100%</span>
+    </div>
+    <div class="device-controls">
+      <button class="ctrl-btn panic" onclick="togglePanic('${dev.id}')">🚨 Panic</button>
+      <button class="ctrl-btn reset" onclick="resetDevice('${dev.id}')">✅ Reset</button>
+      <select class="mode-select" onchange="setMode('${dev.id}', this.value)">
+        <option value="walking"    ${dev.mode==="walking"    ? "selected":""}>Walk</option>
+        <option value="stationary" ${dev.mode==="stationary" ? "selected":""}>Still</option>
+        <option value="running"    ${dev.mode==="running"    ? "selected":""}>Run</option>
+        <option value="vehicle"    ${dev.mode==="vehicle"    ? "selected":""}>Vehicle</option>
+      </select>
+      <button class="ctrl-btn turn" onclick="sharpTurn('${dev.id}')">↩ Turn</button>
+    </div>
+  `;
+  return div;
+}
+
+// ── Device controls ───────────────────────────────────────────────────────────
+function togglePanic(id) {
+  const dev = devices.get(id);
+  if (!dev) return;
+  dev.emergency = !dev.emergency;
+  if (dev.emergency) {
+    appendLog(dev, "🚨 PANIC TRIGGERED", "log-emergency");
+    playAlertSound();
+  } else {
+    // Send explicit reset tick
+    sendReset(dev);
   }
+}
+
+function resetDevice(id) {
+  const dev = devices.get(id);
+  if (!dev) return;
+  dev.emergency = false;
+  dev.escalationStart = null;
+  dev.escalationLevel = 0;
+  dev.trailLayers.forEach(l => map.removeLayer(l));
+  dev.trailLayers = [];
+  sendReset(dev);
+  appendLog(dev, "✅ RESET", "log-reset");
+}
+
+async function sendReset(dev) {
+  const payload = {
+    device_id:  dev.id,
+    timestamp:  Math.floor(Date.now() / 1000),
+    latitude:   dev.lat,
+    longitude:  dev.lng,
+    speed:      0,
+    battery:    Math.round(dev.battery),
+    emergency:  false,
+    reset:      true,
+  };
+  postUpdate(payload);
+}
+
+function setMode(id, mode) {
+  const dev = devices.get(id);
+  if (dev) dev.mode = mode;
+}
+
+function sharpTurn(id) {
+  const dev = devices.get(id);
+  if (dev) {
+    dev.heading = Math.random() * 360;
+    appendLog(dev, `↩ Sharp turn → ${Math.round(dev.heading)}°`, "");
+  }
+}
+
+// ── Add / Remove devices ──────────────────────────────────────────────────────
+function openModal() {
+  document.getElementById("add-modal").classList.add("open");
+  document.getElementById("modal-name").value = `Unit ${++deviceCounter}`;
+  document.getElementById("modal-name").focus();
+}
+
+function closeModal() {
+  document.getElementById("add-modal").classList.remove("open");
+}
+
+document.getElementById("modal-location").addEventListener("change", function() {
+  document.getElementById("custom-coords-row").style.display =
+    this.value === "custom" ? "block" : "none";
 });
 
-function _buildWsUrl() {
-  const key = _getApiKey();
-  return key ? `${WS_URL}?token=${encodeURIComponent(key)}` : WS_URL;
+// Allow Enter key in modal
+document.getElementById("add-modal").addEventListener("keydown", e => {
+  if (e.key === "Enter") confirmAddDevice();
+  if (e.key === "Escape") closeModal();
+});
+
+function confirmAddDevice() {
+  const name = document.getElementById("modal-name").value.trim() || `Device ${deviceCounter}`;
+  const locVal = document.getElementById("modal-location").value;
+  const mode   = document.getElementById("modal-mode").value;
+
+  let lat, lng;
+  if (locVal === "custom") {
+    const parts = document.getElementById("modal-custom").value.split(",");
+    lat = parseFloat(parts[0]);
+    lng = parseFloat(parts[1]);
+    if (isNaN(lat) || isNaN(lng)) { showToast("Invalid coordinates."); return; }
+  } else {
+    [lat, lng] = locVal.split(",").map(Number);
+  }
+
+  const id  = `DEV_${Date.now()}`;
+  const dev = makeDeviceState(id, name, lat, lng, mode);
+  devices.set(id, dev);
+
+  // Register with backend
+  registerDevice(id);
+
+  // Start tick interval
+  dev.intervalId = setInterval(() => deviceTick(dev), 1000);
+
+  // Render card
+  const card = renderDeviceCard(dev);
+  document.getElementById("device-list").appendChild(card);
+
+  // Auto-select first device
+  if (!selectedDeviceId) selectDevice(id);
+
+  closeModal();
+  showToast(`✅ ${name} added`);
 }
 
+function removeDevice(id) {
+  const dev = devices.get(id);
+  if (!dev) return;
+  clearInterval(dev.intervalId);
+  if (dev.marker) map.removeLayer(dev.marker);
+  dev.trailLayers.forEach(l => map.removeLayer(l));
+  devices.delete(id);
+
+  const card = document.getElementById(`card-${id}`);
+  if (card) card.remove();
+
+  if (selectedDeviceId === id) {
+    const next = devices.keys().next().value;
+    selectedDeviceId = null;
+    if (next) selectDevice(next);
+    else {
+      document.getElementById("log-device-label").textContent = "—";
+      document.getElementById("log-list").innerHTML = "";
+    }
+  }
+  showToast("Device removed");
+}
+
+function selectDevice(id) {
+  // Deselect old
+  if (selectedDeviceId) {
+    const old = document.getElementById(`card-${selectedDeviceId}`);
+    if (old) old.classList.remove("selected");
+  }
+  selectedDeviceId = id;
+  const card = document.getElementById(`card-${id}`);
+  if (card) card.classList.add("selected");
+
+  const dev = devices.get(id);
+  if (!dev) return;
+
+  document.getElementById("log-device-label").textContent = dev.name;
+
+  // Re-render log for this device
+  renderLog(dev);
+
+  // Pan map to this device
+  if (dev.marker) map.panTo(dev.marker.getLatLng());
+}
+
+// ── Log ───────────────────────────────────────────────────────────────────────
+function appendLog(dev, text, cls) {
+  dev.logs.unshift({ text, cls }); // newest first
+  if (dev.logs.length > 200) dev.logs.length = 200;
+  if (dev.id === selectedDeviceId) renderLog(dev);
+}
+
+function renderLog(dev) {
+  const el = document.getElementById("log-list");
+  el.innerHTML = "";
+  dev.logs.forEach(entry => {
+    const li = document.createElement("div");
+    li.className = `log-entry ${entry.cls || ""}`;
+    li.textContent = entry.text;
+    el.appendChild(li);
+  });
+}
+
+// ── Handle a broadcast from the backend ───────────────────────────────────────
+// Covers TWO kinds of devices:
+//   1. Local devices  (isLocal=true)  — created via "+ Add Device" in this tab.
+//      Movement is computed here in the browser; this function just syncs the
+//      authoritative risk/escalation/reset state computed by the backend.
+//   2. Remote devices (isLocal=false) — anything broadcasting from OUTSIDE this
+//      tab: the Python simulator.py, send_updates.py, or a device added in a
+//      different browser tab. These have no local interval — their marker,
+//      card, and log are driven entirely by incoming broadcasts.
+// This lets the Python simulator and the in-browser simulator run at the same
+// time, on the same map, in the same sidebar, simultaneously.
+function handleBroadcast(data) {
+  let dev = devices.get(data.device_id);
+
+  // First time seeing this device → auto-create a REMOTE card for it.
+  if (!dev) {
+    dev = makeDeviceState(
+      data.device_id,
+      data.device_id,        // no friendly name available — use the raw ID
+      data.latitude,
+      data.longitude,
+      data.context || "walking",
+      false                  // isLocal = false: backend drives this device
+    );
+    devices.set(data.device_id, dev);
+
+    const card = renderDeviceCard(dev);
+    document.getElementById("device-list").appendChild(card);
+
+    if (!selectedDeviceId) selectDevice(dev.id);
+    showToast(`📡 ${dev.id} connected (external device)`);
+  }
+
+  // Sync authoritative fields from the backend on every broadcast.
+  dev.lat       = data.latitude;
+  dev.lng       = data.longitude;
+  dev.risk      = data.risk;
+  dev.context   = data.context;
+  dev.battery   = data.battery;
+  dev.emergency = data.emergency;
+
+  // Remote devices have no local tick loop — render their map marker and
+  // card here directly using the broadcast data, exactly like deviceTick()
+  // does for local devices.
+  if (!dev.isLocal) {
+    updateDeviceMap(dev, data.speed);
+    updateDeviceCard(dev, data.speed);
+
+    const entry = `${new Date(data.timestamp * 1000).toLocaleTimeString()} · ` +
+      `${data.context} · ${data.speed.toFixed(2)}m/s · bat:${data.battery}%` +
+      (data.emergency ? " · 🚨 EMERGENCY" : "");
+    appendLog(dev, entry, data.emergency ? "log-emergency" : "");
+  }
+
+  if (data.escalation) {
+    appendLog(dev, `🚨 SERVER: ${data.escalation.toUpperCase()}`, "log-escalation");
+    playAlertSound();
+  }
+  if (data.reset) {
+    dev.trailLayers.forEach(l => map.removeLayer(l));
+    dev.trailLayers = [];
+    appendLog(dev, "✅ SERVER: Reset confirmed", "log-reset");
+  }
+}
+
+// ── WebSocket — receive broadcasts from backend ───────────────────────────────
+// (Even though simulator runs in browser, backend still broadcasts to confirm
+//  receipt and compute escalation authoritatively)
+const connDot   = document.getElementById("conn-dot");
+const connLabel = document.getElementById("conn-label");
 let ws = null;
 let reconnectDelay = 1000;
-const RECONNECT_MAX = 30000;
 
 function connect() {
-  ws = new WebSocket(_buildWsUrl());
+  const key = _getApiKey();
+  const url = key ? `${WS_URL}?token=${encodeURIComponent(key)}` : WS_URL;
+  ws = new WebSocket(url);
 
   ws.onopen = () => {
     reconnectDelay = 1000;
-    connMessage.innerText     = "Connected. Waiting for device data…";
-    connMessage.style.display = "block";
-    connDot.className         = "connected";
-    connLabel.innerText       = "Live";
+    connDot.className   = "connected";
+    connLabel.innerText = "Live";
   };
 
-  ws.onmessage = (event) => { handlePayload(JSON.parse(event.data)); };
+  ws.onmessage = (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      handleBroadcast(data);
+    } catch(err) {
+      console.error("WS parse error:", err);
+    }
+  };
 
   ws.onerror = () => {
     connDot.className   = "reconnecting";
@@ -198,282 +609,47 @@ function connect() {
   };
 
   ws.onclose = () => {
-    const secs = Math.round(reconnectDelay / 1000);
-    connMessage.innerText     = `Disconnected. Reconnecting in ${secs}s…`;
-    connMessage.style.display = "block";
-    connDot.className         = "disconnected";
-    connLabel.innerText       = `Reconnecting in ${secs}s`;
+    connDot.className   = "disconnected";
+    connLabel.innerText = `Reconnecting in ${Math.round(reconnectDelay/1000)}s`;
     setTimeout(() => {
-      connMessage.innerText   = "Reconnecting…";
-      connDot.className       = "reconnecting";
-      connLabel.innerText     = "Reconnecting…";
+      connDot.className   = "reconnecting";
+      connLabel.innerText = "Reconnecting…";
       connect();
     }, reconnectDelay);
-    reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX);
+    reconnectDelay = Math.min(reconnectDelay * 2, 30000);
   };
 }
-
 connect();
 
-// ---------------------------------------------------------------------------
-// Audio
-// ---------------------------------------------------------------------------
+// ── Toast ─────────────────────────────────────────────────────────────────────
+let toastQueue = [], toastRunning = false;
+function showToast(msg) {
+  toastQueue.push(msg);
+  if (!toastRunning) runToast();
+}
+function runToast() {
+  if (!toastQueue.length) { toastRunning = false; return; }
+  toastRunning = true;
+  const t = document.getElementById("toast");
+  t.textContent = toastQueue.shift();
+  t.classList.add("show");
+  setTimeout(() => { t.classList.remove("show"); setTimeout(runToast, 400); }, 2800);
+}
+
+// ── Audio ─────────────────────────────────────────────────────────────────────
 let audioCtx = null;
 function playAlertSound() {
   try {
     if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const osc  = audioCtx.createOscillator();
+    const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
-    osc.connect(gain);
-    gain.connect(audioCtx.destination);
+    osc.connect(gain); gain.connect(audioCtx.destination);
     osc.frequency.value = 880;
-    gain.gain.setValueAtTime(0.4, audioCtx.currentTime);
+    gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
     gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.4);
-    osc.start();
-    osc.stop(audioCtx.currentTime + 0.4);
-  } catch (e) {
-    console.warn("Audio alert failed:", e);
-  }
+    osc.start(); osc.stop(audioCtx.currentTime + 0.4);
+  } catch(e) { console.warn("Audio:", e); }
 }
 
-// ---------------------------------------------------------------------------
-// Main payload handler
-// ---------------------------------------------------------------------------
-function handlePayload(data) {
-  try {
-  connMessage.style.display = "none";
-
-  const { latitude, longitude, emergency, risk, context } = data;
-  const deviceId = data.device_id;
-
-  // --- Accumulate position history for this device ---
-  if (!positionHistory[deviceId]) positionHistory[deviceId] = [];
-  positionHistory[deviceId].push({
-    lat: latitude, lng: longitude,
-    risk, ts: data.timestamp
-  });
-  // Trim to last 10 minutes (keep more than 5 min so replay has full window)
-  const cutoff = data.timestamp - 600;
-  positionHistory[deviceId] = positionHistory[deviceId].filter(p => p.ts >= cutoff);
-
-  // --- Emergency state transitions ---
-  const wasEmergency = emergencyActive;
-
-  if (emergency && !wasEmergency) {
-    // Emergency just started — record start time and draw pre-emergency trail
-    emergencyActive  = true;
-    emergencyStartTs = data.timestamp;
-    clearTrailLayers(activeTrailLayers);
-
-    // Pull last 5 min of history before this moment
-    const windowStart = emergencyStartTs - HISTORY_WINDOW;
-    const prePoints   = positionHistory[deviceId].filter(
-      p => p.ts >= windowStart && p.ts <= emergencyStartTs
-    );
-    if (prePoints.length >= 2) {
-      activeTrailLayers.push(...drawTrailFromPoints(prePoints));
-    }
-  }
-
-  if (!emergency && wasEmergency) {
-    // Emergency ended (reset) — clear the trail
-    emergencyActive  = false;
-    emergencyStartTs = null;
-    clearTrailLayers(activeTrailLayers);
-  }
-
-  // --- Extend live trail tick-by-tick during active emergency ---
-  // (skip during replay — replay draws its own trail all at once)
-  if (emergencyActive && !replayRunning) {
-    const prev = activeTrailLayers.length > 0
-      ? activeTrailLayers[activeTrailLayers.length - 1]
-      : null;
-
-    // If risk changed, start a new segment; else extend the last one
-    const color = TRAIL_COLORS[risk] || TRAIL_COLORS.normal;
-    if (!prev || prev.options.color !== color) {
-      const poly = L.polyline([[latitude, longitude]], {
-        color, weight: TRAIL_WEIGHT, opacity: TRAIL_OPACITY
-      }).addTo(map);
-      activeTrailLayers.push(poly);
-      document.getElementById("trail-legend").classList.add("visible");
-    } else {
-      prev.addLatLng([latitude, longitude]);
-    }
-  }
-
-  // --- Status box ---
-  document.getElementById("s-device").innerText    = deviceId;
-  document.getElementById("s-context").innerText   = context;
-  document.getElementById("s-risk").innerText      = risk;
-  document.getElementById("s-emergency").innerText = emergency;
-
-  const escRow = document.getElementById("s-esc-row");
-  const escVal = document.getElementById("s-escalation");
-  if (data.escalation) {
-    escVal.innerText     = data.escalation.toUpperCase();
-    escRow.style.display = "block";
-  } else {
-    escRow.style.display = "none";
-  }
-  document.getElementById("s-reset-row").style.display = data.reset ? "block" : "none";
-
-  // --- Battery bar ---
-  if (data.battery !== undefined) {
-    const wrap = document.getElementById("battery-bar-wrap");
-    const bar  = document.getElementById("battery-bar");
-    const txt  = document.getElementById("battery-text");
-    wrap.style.display = "block";
-    txt.style.display  = "block";
-    bar.style.width    = `${data.battery}%`;
-    txt.innerText      = `Battery: ${data.battery}%`;
-    if (data.battery <= 20) {
-      bar.style.background = "#ef4444"; txt.style.color = "#ef4444";
-    } else if (data.battery <= 50) {
-      bar.style.background = "#f59e0b"; txt.style.color = "#92400e";
-    } else {
-      bar.style.background = "#22c55e"; txt.style.color = "#166534";
-    }
-  }
-
-  // --- Alerts ---
-  if (data.alert || data.escalation) playAlertSound();
-  if (data.alert)     showToast(`🚨 ALERT: ${risk.toUpperCase()}`);
-  if (data.escalation) showToast(`🚨 ESCALATION: ${data.escalation.toUpperCase()}`);
-
-  // --- Marker ---
-  const color = emergency ? "#ff2222"
-              : risk === "elevated" ? "#ff9900"
-              : "#22c55e";
-
-  if (!marker) {
-    marker = L.circleMarker([latitude, longitude], {
-      radius: 10, color, fillColor: color, fillOpacity: 0.9
-    }).addTo(map);
-  } else {
-    marker.setLatLng([latitude, longitude]);
-    marker.setStyle({ color, fillColor: color });
-  }
-
-  if (emergency && marker) {
-    if (!blinkInterval) {
-      blinkInterval = setInterval(() => {
-        marker.setStyle({
-          fillOpacity: marker.options.fillOpacity === 0.9 ? 0.2 : 0.9
-        });
-      }, 500);
-    }
-  } else {
-    if (blinkInterval) {
-      clearInterval(blinkInterval);
-      blinkInterval = null;
-      if (marker) marker.setStyle({ fillOpacity: 0.9 });
-    }
-  }
-
-  // --- Timeline ---
-  const item      = document.createElement("li");
-  const humanTime = new Date(data.timestamp * 1000).toLocaleTimeString();
-  const isoTime   = new Date(data.timestamp * 1000).toISOString();
-  item.title      = `Unix: ${data.timestamp}  |  ISO: ${isoTime}`;
-  item.innerText  = `${humanTime} — ${context} — ${risk}`;
-  timeline.prepend(item);
-  while (timeline.children.length > 100) timeline.removeChild(timeline.lastChild);
-
-  // --- Auto-pan only when device leaves visible bounds ---
-  const latLng = [latitude, longitude];
-  if (!map.getBounds().contains(latLng)) map.setView(latLng, map.getZoom());
-  } catch (err) {
-    console.error("handlePayload crashed:", err, "\nData was:", JSON.stringify(data));
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Toast
-// ---------------------------------------------------------------------------
-function showToast(message) {
-  toastQueue.push(message);
-  if (!toastRunning) processToastQueue();
-}
-
-function processToastQueue() {
-  if (toastQueue.length === 0) { toastRunning = false; return; }
-  toastRunning = true;
-  const toast = document.getElementById("toast");
-  toast.textContent = toastQueue.shift();
-  toast.classList.add("show");
-  setTimeout(() => {
-    toast.classList.remove("show");
-    setTimeout(processToastQueue, 400);
-  }, 3000);
-}
-
-// ---------------------------------------------------------------------------
-// Replay
-// ---------------------------------------------------------------------------
-async function replay(deviceId) {
-  if (!deviceId) return;
-
-  // Fetch full history from backend
-  const res     = await fetch(
-    `http://127.0.0.1:8000/device/${deviceId}/history`,
-    { headers: _authHeaders() }
-  );
-  const history = await res.json();
-  if (!history.length) { showToast("No history found for that device."); return; }
-
-  // Clear any existing live trail and suppres live trail drawing
-  clearTrailLayers(activeTrailLayers);
-  clearTrailLayers(replayTrailLayers);
-  replayRunning = true;
-
-  // Find the emergency window in history (first panic trigger → reset/end)
-  const emergencyPoints = [];
-  let inEmergency = false;
-
-  for (const point of history) {
-    if (point.emergency && !inEmergency) inEmergency = true;
-    if (!point.emergency && inEmergency) inEmergency = false;   // reset happened
-    if (inEmergency) {
-      emergencyPoints.push({
-        lat: point.latitude, lng: point.longitude,
-        risk: point.risk, ts: point.timestamp
-      });
-    }
-  }
-
-  // Pre-emergency: 5 min before first panic
-  let prePoints = [];
-  if (emergencyPoints.length > 0) {
-    const firstPanicTs  = emergencyPoints[0].ts;
-    const windowStart   = firstPanicTs - HISTORY_WINDOW;
-    prePoints = history
-      .filter(p => p.timestamp >= windowStart && p.timestamp < firstPanicTs)
-      .map(p => ({ lat: p.latitude, lng: p.longitude, risk: "normal", ts: p.timestamp }));
-  }
-
-  const trailPoints = [...prePoints, ...emergencyPoints];
-
-  if (trailPoints.length < 2) {
-    showToast("No emergency path in history to replay.");
-    replayRunning = false;
-    return;
-  }
-
-  // Draw the full path all at once (don't animate it point-by-point)
-  replayTrailLayers.push(...drawTrailFromPoints(trailPoints));
-
-  // Fit map to the replay trail
-  const allLatLngs = trailPoints.map(p => [p.lat, p.lng]);
-  map.fitBounds(L.latLngBounds(allLatLngs), { padding: [40, 40] });
-
-  // Now step through payloads to animate the marker and timeline
-  // handlePayload is called but trail drawing is suppressed (replayRunning=true)
-  for (const point of history) {
-    handlePayload(point);
-    await new Promise(r => setTimeout(r, 300));
-  }
-
-  replayRunning = false;
-  showToast("Replay complete.");
-}
+// ── Modal location select ─────────────────────────────────────────────────────
+// (Listener already declared above near modal HTML)

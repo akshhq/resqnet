@@ -3,20 +3,26 @@ setlocal enabledelayedexpansion
 
 :: ─────────────────────────────────────────────────────────────────────────────
 :: ResQNet — start.bat
-:: Usage:  start.bat             interactive simulator
-::         start.bat --demo      scripted demo
-::         start.bat --no-sim    backend + dashboard only
+::
+:: The dashboard now has its OWN built-in simulator (the "+ Add Device"
+:: button in the browser). The Python simulator.py is optional and runs
+:: ALONGSIDE it — both can drive devices on the same map at the same time.
+::
+:: Usage:
+::   start.bat              backend + dashboard only (use "+ Add Device" in browser)
+::   start.bat --with-sim    also launches the Python simulator (interactive)
+::   start.bat --demo        also launches the Python simulator in demo mode
 :: ─────────────────────────────────────────────────────────────────────────────
 
 set "ROOT=%~dp0"
 if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
 
 set "DEMO_MODE=false"
-set "NO_SIM=false"
+set "WITH_SIM=false"
 :parse_args
 if "%~1"=="" goto :args_done
-if /i "%~1"=="--demo"   set "DEMO_MODE=true"
-if /i "%~1"=="--no-sim" set "NO_SIM=true"
+if /i "%~1"=="--demo"      ( set "DEMO_MODE=true" & set "WITH_SIM=true" )
+if /i "%~1"=="--with-sim"  set "WITH_SIM=true"
 shift
 goto :parse_args
 :args_done
@@ -48,6 +54,9 @@ if not exist "%ROOT%\Trial_Dashboard\index.html" (
 )
 
 :: ── Backend ───────────────────────────────────────────────────────────────────
+:: Binds to 0.0.0.0 so both "localhost" (IPv6 ::1 on Windows) and 127.0.0.1
+:: (IPv4) work. Binding only to 127.0.0.1 caused devices to silently fail
+:: to appear when the browser used "localhost" in the WebSocket URL.
 echo [resqnet] Starting backend  ^> http://127.0.0.1:8000
 start "ResQNet Backend" cmd /k "cd /d "%ROOT%\backend" & uvicorn app.main:app --host 0.0.0.0 --port 8000"
 
@@ -58,22 +67,38 @@ timeout /t 4 /nobreak >nul
 echo [resqnet] Starting dashboard ^> http://localhost:5500
 start "ResQNet Dashboard" cmd /k "cd /d "%ROOT%\Trial_Dashboard" & !PYTHON! -m http.server 5500"
 
-:: Wait a moment then open in default browser
 timeout /t 2 /nobreak >nul
 echo [resqnet] Opening dashboard in browser...
 start "" "http://localhost:5500"
 
-:: ── Simulator ─────────────────────────────────────────────────────────────────
-if "%NO_SIM%"=="true" (
-    echo [resqnet] Simulator skipped.
-    echo [resqnet] To start manually: cd simulator ^&^& python simulator.py
-    goto :done
+:: ── Python simulator (optional — dashboard has its own built-in one) ─────────
+if "%WITH_SIM%"=="false" (
+    echo.
+    echo [resqnet] ResQNet is running.
+    echo [resqnet]   Dashboard ^> http://localhost:5500
+    echo [resqnet]   Backend   ^> http://127.0.0.1:8000
+    echo.
+    echo [resqnet] Use the "+ Add Device" button in the dashboard to start
+    echo [resqnet] simulating devices right in the browser.
+    echo.
+    echo [resqnet] To ALSO run the Python simulator alongside it:
+    echo [resqnet]   start.bat --with-sim
+    echo [resqnet]   start.bat --demo
+    echo.
+    pause
+    exit /b 0
 )
 
 if not exist "%ROOT%\simulator\simulator.py" (
     echo [resqnet] WARNING: simulator\simulator.py not found. Skipping.
     goto :done
 )
+
+echo.
+echo [resqnet] Launching Python simulator IN ADDITION TO the browser's
+echo [resqnet] built-in simulator. Both will appear on the same dashboard
+echo [resqnet] at the same time, as separate device cards.
+echo.
 
 cd /d "%ROOT%\simulator"
 
