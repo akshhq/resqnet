@@ -4,7 +4,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 const BACKEND = "http://127.0.0.1:8000";
-const WS_URL  = window.RESQNET_WS_URL || "ws://127.0.0.1:8000/ws/live";
+const WS_URL  = window.RESQNET_WS_URL || "ws://resqnet-backend.onrender.com/ws";
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
 function _getApiKey() {
