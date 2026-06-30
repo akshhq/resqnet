@@ -119,21 +119,27 @@ The responder sees the full picture. They know whether to call the police, drive
 ## The Architecture
 
 ```
-  [ Wearable Device / Simulator ]
+ [ Browser Simulator ]      [ Python Simulator ]
+   (built into dashboard)     (optional, standalone)
+          │                          │
+          │   1 update / second, both
+          ▼                          ▼
+            [ FastAPI Backend ]
+              ┌─────────────┐
+              │  Classify   │  speed → context
+              │  Detect     │  anomaly check
+              │  Assess     │  risk level
+              │  Escalate   │  30s / 90s thresholds
+              └─────────────┘
+                    │
+                    │  WebSocket broadcast
+                    ▼
+            [ Live Dashboard ]
+   (sidebar device list + log + live map —
+    both simulators render side by side)
             │
-            │  1 update / second
             ▼
-     [ FastAPI Backend ]
-      ┌─────────────┐
-      │  Classify   │  speed → context
-      │  Detect     │  anomaly check
-      │  Assess     │  risk level
-      │  Escalate   │  30s / 90s thresholds
-      └─────────────┘
-            │
-            │  WebSocket broadcast
-            ▼
-   [ Live Dashboard ]          [ Responder App — planned ]
+   [ Responder App — planned ]
    [ Command Center — planned ]
 ```
 
@@ -141,7 +147,9 @@ The responder sees the full picture. They know whether to call the police, drive
 
 ## What This Is Not
 
-ResQNet is a **software-first prototype**. It demonstrates the complete architecture — trigger, classification, escalation, broadcast, dashboard — without requiring physical hardware. The simulator produces realistic human movement patterns (heading-based, speed-smoothed, with GPS noise) so the system behaves exactly as it would with a real device.
+ResQNet is a **software-first prototype**. It demonstrates the complete architecture — trigger, classification, escalation, broadcast, dashboard — without requiring physical hardware.
+
+Two independent simulators produce realistic human movement (heading-based, speed-smoothed, with GPS noise): one built directly into the dashboard for instant multi-device testing with zero setup, and one as a standalone Python script for scripted demos and interactive keypress control. Both can run **at the same time**, and the dashboard treats every device identically regardless of which simulator — or eventually, which real hardware — produced it.
 
 It is not a finished product. It is proof that the architecture works, and a foundation to build on.
 

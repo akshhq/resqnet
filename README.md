@@ -1,6 +1,6 @@
 # ResQNet — Response & Rescue Network
 
-> A context-aware, device-independent emergency response prototype with real-time situational awareness, intelligent escalation, and a live monitoring dashboard.
+> A context-aware, device-independent emergency response prototype with real-time situational awareness, intelligent escalation, integrated dual simulators, and a live monitoring dashboard.
 
 ---
 
@@ -12,13 +12,14 @@
 4. [Tech Stack](#tech-stack)
 5. [Project Structure](#project-structure)
 6. [How to Run](#how-to-run)
-7. [Simulator Controls](#simulator-controls)
-8. [API Reference](#api-reference)
-9. [Dashboard](#dashboard)
-10. [Design Principles](#design-principles)
-11. [Current Status](#current-status)
-12. [Planned Improvements](#planned-improvements)
-13. [Author](#author)
+7. [In-Browser Simulator](#in-browser-simulator)
+8. [Python Simulator (Optional)](#python-simulator-optional)
+9. [API Reference](#api-reference)
+10. [Security](#security)
+11. [Design Principles](#design-principles)
+12. [Current Status](#current-status)
+13. [Planned Improvements](#planned-improvements)
+14. [Author](#author)
 
 ---
 
@@ -33,16 +34,20 @@ It is designed around a single premise: **the device triggers the alert, not the
 ## Architecture
 
 ```
-[ Device / Simulator ]
-        │
-        │  POST /device/update  (1 Hz)
-        ▼
-[ FastAPI Backend ]
-        │
-        │  WebSocket broadcast
-        ▼
-[ Live Dashboard ]     [ Responder Dashboard (planned) ]
+[ Browser Simulator ]      [ Python Simulator ]
+  (built into dashboard)     (simulator.py, optional)
+        │                           │
+        │   POST /device/update (1 Hz, both)
+        ▼                           ▼
+            [ FastAPI Backend ]
+                    │
+                    │  WebSocket broadcast
+                    ▼
+            [ Live Dashboard ]
+   (renders BOTH simulators on one map, side by side)
 ```
+
+Both simulators can run **at the same time**, driving completely independent devices that appear together on the same map and in the same sidebar — there's no conflict between them.
 
 ### Core data flow
 
@@ -67,12 +72,11 @@ Panic Trigger
 - Reset requires an explicit `reset: true` signal from the device
 - Reset flag is included in every broadcast so all dashboards react simultaneously
 
-### Realistic Device Simulation
-- **Heading-based movement model** — device moves in realistic curves, not random scatter
-- Speed profiles per mode with gaussian noise and smooth lerp transitions
-- GPS noise (~1 m jitter) layered on top of real movement, matching consumer hardware
-- Brief pauses injected for walking mode (traffic lights, checking phone)
-- Battery drains at 0.05%/s, warns at 20%, stops at 0
+### Dual Simulators (run independently or together)
+- **In-browser simulator** — built directly into the dashboard. Click "+ Add Device" to spawn any number of simulated devices, each with its own movement loop, right in the browser. No Python process needed.
+- **Python simulator** — `simulator.py` runs standalone in a terminal for interactive keypress control or scripted demos.
+- Both use the **same heading-based movement model**: realistic curves, gaussian speed noise, smooth lerp transitions, GPS jitter, and brief pauses (traffic lights, checking phone).
+- Devices from either simulator appear together on the same dashboard, identified automatically — the dashboard doesn't care which one created a device.
 
 ### Context Classification
 Speed (m/s) is mapped to movement context each tick:
@@ -100,21 +104,20 @@ Speed (m/s) is mapped to movement context each tick:
 - 30-second cooldown prevents repeat spam
 - Alert flag carried in every broadcast payload
 
-### Live Dashboard
-- Real-time map with device marker (green / orange / red by risk)
-- Marker blinks during active emergency
-- **Movement trail** shown only during active emergency:
-  - Draws the last 5 minutes of pre-emergency path on panic trigger (if available)
-  - Extends live during emergency, coloured by risk level
-  - Cleared automatically on reset
+### Live Dashboard — Sidebar + Map Layout
+- **Left sidebar**, split top/bottom:
+  - **Top half — Device list**: every active device (from either simulator) as a card showing live speed, context, risk pill, battery %, and status dot. Each card has its own Panic / Reset / Mode / Turn controls.
+  - **Bottom half — Movement log**: switches automatically to show the log of whichever device is selected. Capped at 200 entries per device.
+- **Map fills the remaining screen** — never locked to one device. Auto-pans only when the *currently selected* device leaves the visible bounds, so you're always free to pan/zoom and inspect any device manually.
+- **Add Device modal** — name, preset city or custom lat/lng, starting mode.
+- Marker colour: 🟢 normal · 🟠 elevated · 🔴 emergency (with blink)
+- **Movement trail** shown only during active emergency, colour-coded by risk, cleared on reset
 - Battery bar with colour coding (green / amber / red)
-- Event timeline (last 100 entries, with ISO timestamp on hover)
 - WebSocket reconnection with exponential backoff (1s → 30s)
 - Connection status dot (🟢 live / 🟠 reconnecting / 🔴 disconnected)
 - Audio alert on emergency trigger and escalation
-- **Dark mode** toggle (CartoDB dark tiles + dark panel theme)
-- Trail legend showing path colour meanings
-- Replay button: enter a device ID to replay its emergency history
+- **Dark mode** toggle (CartoDB dark tiles + dark panel theme, default ON)
+- API key panel — only needed if backend auth is enabled (see [Security](#security))
 
 ---
 
@@ -125,10 +128,11 @@ Speed (m/s) is mapped to movement context each tick:
 | Backend | Python 3.11+, FastAPI 0.128, Uvicorn |
 | Real-time | WebSockets (native FastAPI) |
 | Validation | Pydantic v2 with Field constraints |
+| Auth | Optional API key (HTTP header + WS token), rate limiting via slowapi |
 | State | In-memory (deque-bounded history, prototype stage) |
-| Frontend | HTML5, Vanilla JS, Leaflet.js |
-| Map tiles | OpenStreetMap (light), CartoDB Dark (dark mode) |
-| Simulator | Python, threading, heading-based movement model |
+| Frontend | HTML5, external CSS, Vanilla JS, Leaflet.js |
+| Map tiles | CartoDB Dark (default), OpenStreetMap (light mode) |
+| Simulators | In-browser JS engine + standalone Python (`simulator.py`) — both heading-based |
 
 ---
 
@@ -136,22 +140,31 @@ Speed (m/s) is mapped to movement context each tick:
 
 ```
 resqnet/
+├── start.bat                 # Windows one-click startup
+├── start.sh                  # macOS/Linux one-click startup
+├── .gitignore
+├── LICENSE
 ├── backend/
 │   ├── app/
 │   │   ├── __init__.py
-│   │   ├── main.py          # FastAPI app, routes, broadcast logic
-│   │   ├── context.py       # Speed classification, risk, escalation
-│   │   ├── schemas.py       # Pydantic request model with field validation
-│   │   ├── storage.py       # In-memory state dicts and deque history
-│   │   └── websocket.py     # ConnectionManager with dead-client cleanup
-│   └── requirements.txt
-├── dashboard/
-│   ├── index.html           # Layout, panels, dark mode styles
-│   └── script.js            # WebSocket client, map, trail, replay
+│   │   ├── main.py           # FastAPI app, routes, broadcast logic
+│   │   ├── auth.py           # Optional API key + WS token validation, rate limit handler
+│   │   ├── context.py        # Speed classification, risk, escalation
+│   │   ├── schemas.py        # Pydantic request models with field validation
+│   │   ├── storage.py        # In-memory state dicts, deque history, registered devices
+│   │   └── websocket.py      # ConnectionManager with dead-client cleanup
+│   ├── requirements.txt
+│   └── .env.example          # Copy to .env to enable auth / configure CORS
+├── Trial_Dashboard/
+│   ├── index.html            # Sidebar + map layout, modal markup
+│   ├── style.css             # All dashboard styling (external file)
+│   └── script.js             # In-browser simulator engine, WS client, map, replay
 └── simulator/
-    ├── simulator.py         # Full interactive + demo simulator
-    └── send_updates.py      # Minimal one-shot update script
+    ├── simulator.py          # Standalone interactive + demo Python simulator
+    └── send_updates.py       # Minimal one-shot update script
 ```
+
+> Note: this project does **not** use Docker. `start.bat` / `start.sh` run everything directly with Python — no containers needed.
 
 ---
 
@@ -159,79 +172,102 @@ resqnet/
 
 ### Prerequisites
 - Python 3.11+
-- A virtual environment (recommended)
+- `pip install -r backend/requirements.txt`
 
-### 1. Backend
+### One-command startup
 
 ```bash
-cd backend
-python -m venv venv
-
 # Windows
-venv\Scripts\activate
+start.bat
 
 # macOS / Linux
-source venv/bin/activate
-
-pip install -r requirements.txt
-python -m uvicorn app.main:app --reload
+./start.sh
 ```
 
-Backend runs at `http://127.0.0.1:8000`
+This starts the backend, serves the dashboard, and opens it in your default browser automatically. The dashboard's own simulator is ready immediately — click **+ Add Device** to start simulating.
 
-#### Environment variables (optional)
-
-Create `backend/.env` to override defaults:
-
-```
-CORS_ORIGINS=http://localhost:5500,http://127.0.0.1:5500
-```
-
-### 2. Dashboard
+### Optional flags
 
 ```bash
-cd dashboard
+start.bat               # backend + dashboard only (recommended — use "+ Add Device" in browser)
+start.bat --with-sim    # ALSO launches the Python simulator (interactive) alongside the browser one
+start.bat --demo        # ALSO launches the Python simulator in scripted demo mode
+```
+(Same flags work with `./start.sh` on macOS/Linux.)
+
+### Manual startup (if you prefer separate terminals)
+
+**Backend:**
+```bash
+cd backend
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+> Binds to `0.0.0.0` (not `127.0.0.1`) so both `localhost` and `127.0.0.1` resolve correctly — important on Windows where `localhost` can resolve to the IPv6 loopback `::1`.
+
+**Dashboard:**
+```bash
+cd Trial_Dashboard
 python -m http.server 5500
 ```
+Open `http://localhost:5500`
 
-Open `http://localhost:5500/index.html`
-
-### 3. Simulator
-
+**Python simulator (optional):**
 ```bash
 cd simulator
 python simulator.py
 ```
 
-#### Options
+---
 
-```bash
-python simulator.py --id DEVICE_02                        # custom device ID
-python simulator.py --url http://192.168.1.10:8000/device/update  # remote backend
-python simulator.py --lat 19.076 --lng 72.877             # start in Mumbai
-python simulator.py --demo                                # run scripted demo automatically
-```
+## In-Browser Simulator
+
+No setup needed — it's part of the dashboard.
+
+1. Click **+ Add Device** (top of the sidebar)
+2. Name it, pick a starting city (or enter custom lat/lng), choose a starting mode
+3. Click **Add Device** — it appears as a card and starts moving immediately
+
+Each device card has:
+
+| Control | Action |
+|---|---|
+| 🚨 Panic | Toggle emergency state for this device |
+| ✅ Reset | Explicitly clear emergency + escalation state |
+| Mode dropdown | Switch between Walk / Still / Run / Vehicle |
+| ↩ Turn | Instantly randomise heading (simulate turning a corner) |
+| ✕ | Remove this device |
+
+Click anywhere on a card (not on a control) to **select** it — the movement log below switches to that device, and the map pans to it. You can add as many devices as you want; each runs its own independent 1Hz movement loop.
 
 ---
 
-## Simulator Controls
+## Python Simulator (Optional)
 
-Interactive mode (default):
+Runs alongside the browser simulator — devices from both appear together on the same dashboard automatically (the dashboard auto-creates a card for any device it sees broadcast from the backend, regardless of source).
+
+```bash
+cd simulator
+python simulator.py                          # interactive
+python simulator.py --id DEVICE_02            # custom device ID
+python simulator.py --lat 19.076 --lng 72.877 # start in Mumbai
+python simulator.py --demo                    # scripted demo, no keypresses
+python simulator.py --key <your_api_key>      # if backend auth is enabled
+```
+
+### Interactive controls
 
 | Key | Action |
 |---|---|
-| `p` | Trigger panic (emergency ON) |
-| `r` | Reset panic (emergency OFF) |
+| `p` | Trigger panic |
+| `r` | Reset panic |
 | `0` | Mode: stationary |
 | `1` | Mode: walking |
 | `2` | Mode: running |
 | `3` | Mode: vehicle |
-| `t` | Sharp turn (randomise heading instantly) |
+| `t` | Sharp turn |
 | `q` | Quit |
 
-Demo mode (`--demo`):
-
-Runs a fully scripted scenario — no keypresses needed. Useful for presentations.
+### Demo mode timeline
 
 ```
   0s   walking — normal state
@@ -247,11 +283,15 @@ Runs a fully scripted scenario — no keypresses needed. Useful for presentation
 
 ## API Reference
 
+### `POST /device/register`
+Register a device ID before it can send updates.
+```json
+{ "device_id": "SIM_DEVICE_01" }
+```
+
 ### `POST /device/update`
+Send a position + state update from a registered device.
 
-Send a position + state update from the device.
-
-**Request body:**
 ```json
 {
   "device_id": "SIM_DEVICE_01",
@@ -265,25 +305,21 @@ Send a position + state update from the device.
 }
 ```
 
-**Validation:**
-- `latitude`: −90 to 90
-- `longitude`: −180 to 180
-- `speed`: ≥ 0
-- `battery`: 0 to 100
+**Validation:** `latitude` −90 to 90 · `longitude` −180 to 180 · `speed` ≥ 0 · `battery` 0–100
 
-**Response:**
-```json
-{ "status": "broadcasted", "risk": "normal" }
-```
+**Response:** `{ "status": "broadcasted", "risk": "normal" }`
 
 ### `GET /device/{device_id}`
 Returns latest state for a device.
 
 ### `GET /device/{device_id}/history`
-Returns full position + event history (last 1,000 entries, capped in memory).
+Returns position + event history (last 1,000 entries, capped in memory).
+
+### `GET /device/registered`
+Lists all registered device IDs (auth required if enabled).
 
 ### `WebSocket /ws/live`
-Connect to receive all device broadcasts in real time.
+Connect to receive all device broadcasts in real time. If auth is enabled, append `?token=<api_key>`.
 
 **Broadcast payload:**
 ```json
@@ -305,20 +341,27 @@ Connect to receive all device broadcasts in real time.
 
 ---
 
-## Dashboard
+## Security
 
-| Element | Description |
-|---|---|
-| Map | Leaflet map with real-time device marker |
-| Marker colour | 🟢 Normal · 🟠 Elevated · 🔴 Emergency/Critical |
-| Movement trail | Shown only during active emergency (blue → orange → red by risk). Includes 5-min pre-emergency path. Cleared on reset. |
-| Status box | Device ID, context, risk, emergency state, escalation label, reset flag |
-| Battery bar | Visual % bar, colour-coded: green > 50%, amber 20–50%, red < 20% |
-| Timeline | Last 100 events with local time display and ISO timestamp on hover |
-| Replay | Enter a device ID and click ▶ Play to replay the emergency path from history |
-| Connection dot | Top-right: 🟢 live / 🟠 reconnecting / 🔴 disconnected |
-| Dark mode | 🌙 button switches map tiles and all panels to dark theme |
-| Audio alert | Short beep on emergency trigger and escalation events |
+Authentication is **optional and off by default** — the system works immediately with zero configuration.
+
+### Enabling auth
+
+1. Copy `backend/.env.example` to `backend/.env`
+2. Generate a key: `python -c "import secrets; print(secrets.token_hex(32))"`
+3. Set `API_KEY=<generated key>` in `.env`
+4. Restart the backend — it prints a startup banner confirming auth is enabled
+
+Once enabled:
+- All HTTP endpoints require an `X-API-Key` header → `403` if missing/wrong
+- WebSocket connections require `?token=<key>` in the URL → closed with code `4403` if invalid
+- The Python simulator auto-loads `backend/.env`, so it picks up the key automatically — or pass `--key` explicitly
+- The dashboard shows a 🔑 API Key input — enter the same key and click Apply to reconnect
+
+### Other protections
+- Rate limiting via `slowapi`: 60 req/min on `/device/update`, 30 req/min on `/device/history`
+- Device registration required — `/device/update` rejects any `device_id` that hasn't called `/device/register` first
+- Pydantic field validation rejects out-of-range coordinates, negative speed, invalid battery before they touch state
 
 ---
 
@@ -331,6 +374,8 @@ Connect to receive all device broadcasts in real time.
 - **History is bounded** — deque with maxlen=1000 prevents silent RAM exhaustion
 - **Validation at the boundary** — Pydantic Field constraints reject invalid payloads before they touch state
 - **Dead clients are cleaned up** — failed WebSocket sends are caught and the connection removed
+- **Auth is additive, not required** — the system is fully usable with zero config, and becomes secure the moment a key is configured
+- **The dashboard doesn't care where a device comes from** — browser simulator, Python simulator, or real hardware all look identical once they reach the backend
 
 ---
 
@@ -341,14 +386,18 @@ Connect to receive all device broadcasts in real time.
 | Backend core | ✅ Stable |
 | WebSocket broadcast | ✅ Working |
 | Risk + escalation logic | ✅ Fixed and verified |
-| Simulator (interactive) | ✅ Working |
-| Simulator (demo mode) | ✅ Working |
-| Dashboard (live view) | ✅ Working |
-| Movement trail | ✅ Working (emergency-only, 5-min pre-window) |
-| Dark mode | ✅ Working |
-| Replay | ✅ Working |
+| Optional API key auth | ✅ Working (HTTP + WS) |
+| Rate limiting | ✅ Working |
+| Device registration | ✅ Working |
+| In-browser simulator | ✅ Working — multi-device, sidebar UI |
+| Python simulator (interactive + demo) | ✅ Working |
+| Both simulators running simultaneously | ✅ Working |
+| Dashboard (sidebar + map layout) | ✅ Working |
+| External CSS file | ✅ Done |
+| Movement trail | ✅ Working (emergency-only, colour-coded) |
+| Dark mode | ✅ Working (default) |
+| Docker | ❌ Removed — not needed for this project |
 | Persistent storage | ❌ Not yet (in-memory only) |
-| Authentication | ❌ Not yet |
 | Notifications (SMS/email) | ❌ Not yet |
 | Hardware device | ❌ Not yet |
 
@@ -356,16 +405,9 @@ Connect to receive all device broadcasts in real time.
 
 ## Planned Improvements
 
-### Security
-- API key authentication for all device endpoints
-- JWT-based authentication for dashboard WebSocket connections
-- Rate limiting on `/device/update` (prevent spam / DoS)
-- Registered device list — only known device IDs can send updates
-
 ### Backend
-- Replace `print()` with Python `logging` module (levels, timestamps, file output)
+- Replace remaining `print()` calls with Python `logging` module (levels, timestamps, file output)
 - API versioning — prefix all routes with `/api/v1/`
-- Remove or secure the `/test/broadcast` debug endpoint
 - Persistent storage (SQLite → PostgreSQL) so history survives restarts
 - Configurable escalation thresholds via `.env`
 
@@ -409,10 +451,11 @@ For organisation administrators:
 - Customisable escalation thresholds per organisation
 - Monthly incident reports
 
-### Infrastructure
-- Docker + `docker-compose` for single-command local setup
-- GitHub Actions CI (run pytest on every push)
-- `.gitignore` and `LICENSE` file
+### Testing & CI
+- Unit tests for `context.py` (escalation, risk, classification logic)
+- Integration tests for the full `/device/update` cycle
+- GitHub Actions CI on push
+- `ruff` + `black` + pre-commit hook
 
 ### Hardware (Future)
 - **ESP32** microcontroller with **NEO-M8N GPS module**
