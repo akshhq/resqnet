@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0f172a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="ResQNet">
+  <meta name="description" content="ResQNet personal safety dashboard">
+  <link rel="manifest" href="manifest.json">
+  <link rel="stylesheet" href="style.css">
+  <title>ResQNet — My Dashboard</title>
+</head>
+<body>
+
+<!-- ── Toast ── -->
+<div id="toast"></div>
+
+<!-- ── Top nav (shown after login) ── -->
+<nav id="top-nav" class="hidden">
+  <div class="nav-brand">🛡 ResQNet</div>
+  <div class="nav-tabs">
+    <button class="nav-tab active" data-view="home">Home</button>
+    <button class="nav-tab" data-view="contacts">Contacts</button>
+    <button class="nav-tab" data-view="preferences">Settings</button>
+    <button class="nav-tab" data-view="incidents">History</button>
+  </div>
+  <button id="logout-btn" class="nav-logout">Sign out</button>
+</nav>
+
+<!-- ════════════════════════════════════════════
+     VIEW: auth  (login + register tabs)
+════════════════════════════════════════════ -->
+<div id="view-auth" class="view active">
+  <div class="auth-card">
+    <div class="auth-logo">🛡 ResQNet</div>
+    <p class="auth-tagline">Personal Safety · Always On</p>
+
+    <div class="auth-tabs">
+      <button class="auth-tab active" data-tab="login">Sign In</button>
+      <button class="auth-tab" data-tab="register">Register</button>
+    </div>
+
+    <!-- Login -->
+    <div id="tab-login" class="auth-form active">
+      <div class="field">
+        <label>Phone Number</label>
+        <input id="login-phone" type="tel" placeholder="+91 98765 43210">
+      </div>
+      <button class="btn-primary" id="login-btn">Send OTP</button>
+      <p class="auth-hint">We'll send a verification code to your phone.</p>
+    </div>
+
+    <!-- Register -->
+    <div id="tab-register" class="auth-form">
+      <div class="field">
+        <label>Full Name</label>
+        <input id="reg-name" type="text" placeholder="Aksh Kumar">
+      </div>
+      <div class="field">
+        <label>Date of Birth</label>
+        <input id="reg-dob" type="date">
+      </div>
+      <div class="field">
+        <label>Phone Number</label>
+        <input id="reg-phone" type="tel" placeholder="+91 98765 43210">
+      </div>
+      <div class="field">
+        <label>Email Address</label>
+        <input id="reg-email" type="email" placeholder="you@example.com">
+      </div>
+      <button class="btn-primary" id="register-btn">Create Account</button>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════
+     VIEW: otp  (shown after login or register)
+════════════════════════════════════════════ -->
+<div id="view-otp" class="view">
+  <div class="auth-card">
+    <div class="auth-logo">📲</div>
+    <h2 class="otp-title">Verify Your Phone</h2>
+    <p class="otp-sub" id="otp-hint">Enter the 6-digit code sent to your number.</p>
+
+    <!-- MSG91 widget renders into this div -->
+    <div id="msg91-widget-container"></div>
+
+    <button class="btn-ghost" id="otp-back-btn">← Back</button>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════
+     VIEW: home  (device cards + add device)
+════════════════════════════════════════════ -->
+<div id="view-home" class="view">
+  <div class="page-content">
+
+    <!-- User greeting -->
+    <div class="home-header">
+      <div>
+        <h2 id="home-greeting">Welcome back</h2>
+        <p class="home-uid" id="home-uid"></p>
+      </div>
+      <button class="btn-primary btn-sm" id="add-device-btn">+ Add Device</button>
+    </div>
+
+    <!-- Device cards -->
+    <section class="section">
+      <div class="section-title">My Devices</div>
+      <div id="device-cards" class="device-grid">
+        <div class="empty-state" id="no-devices">
+          No devices registered yet.<br>Click <b>+ Add Device</b> to get started.
+        </div>
+      </div>
+    </section>
+
+    <!-- Quick-access contacts summary -->
+    <section class="section">
+      <div class="section-title">Emergency Contacts <span class="section-action" id="goto-contacts">Edit →</span></div>
+      <div id="contacts-summary" class="contacts-summary"></div>
+    </section>
+
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════
+     VIEW: contacts
+════════════════════════════════════════════ -->
+<div id="view-contacts" class="view">
+  <div class="page-content">
+    <div class="page-header">
+      <h2>Emergency Contacts</h2>
+      <p class="page-sub">Up to 3 contacts, notified in priority order when you trigger an emergency.</p>
+    </div>
+
+    <div id="contact-cards" class="contact-list"></div>
+
+    <div id="add-contact-form" class="card form-card hidden">
+      <div class="card-title">Add Contact</div>
+      <div class="field">
+        <label>Name</label>
+        <input id="c-name" type="text" placeholder="Mom">
+      </div>
+      <div class="field">
+        <label>Phone</label>
+        <input id="c-phone" type="tel" placeholder="+91 98765 43210">
+      </div>
+      <div class="field">
+        <label>Email (optional)</label>
+        <input id="c-email" type="email" placeholder="mom@example.com">
+      </div>
+      <div class="field">
+        <label>Priority</label>
+        <select id="c-priority">
+          <option value="1">1 — First notified</option>
+          <option value="2">2 — Second notified</option>
+          <option value="3">3 — Third notified</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Notify via</label>
+        <div class="checkbox-row">
+          <label class="checkbox-label"><input type="checkbox" id="c-sms" checked> SMS</label>
+          <label class="checkbox-label"><input type="checkbox" id="c-wa" checked> WhatsApp</label>
+          <label class="checkbox-label"><input type="checkbox" id="c-email-chk"> Email</label>
+        </div>
+      </div>
+      <div class="form-actions">
+        <button class="btn-primary btn-sm" id="save-contact-btn">Save Contact</button>
+        <button class="btn-ghost btn-sm" id="cancel-contact-btn">Cancel</button>
+      </div>
+    </div>
+
+    <button class="btn-outline" id="show-add-contact-btn">+ Add Contact</button>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════
+     VIEW: preferences
+════════════════════════════════════════════ -->
+<div id="view-preferences" class="view">
+  <div class="page-content">
+    <div class="page-header">
+      <h2>Settings</h2>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Notifications</div>
+      <div class="pref-row">
+        <span>Emergency alerts</span>
+        <input type="checkbox" id="pref-emergency" class="toggle" checked>
+      </div>
+      <div class="pref-row">
+        <span>Escalation alerts</span>
+        <input type="checkbox" id="pref-escalation" class="toggle" checked>
+      </div>
+      <div class="pref-row">
+        <span>Low battery warnings</span>
+        <input type="checkbox" id="pref-battery" class="toggle" checked>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Quiet Hours</div>
+      <div class="pref-row">
+        <span>Enable quiet hours</span>
+        <input type="checkbox" id="pref-quiet-enabled" class="toggle">
+      </div>
+      <div id="quiet-hours-fields" class="quiet-fields hidden">
+        <div class="field-inline">
+          <label>From</label>
+          <input type="time" id="pref-quiet-start" value="22:00">
+        </div>
+        <div class="field-inline">
+          <label>To</label>
+          <input type="time" id="pref-quiet-end" value="07:00">
+        </div>
+      </div>
+    </div>
+
+    <button class="btn-primary" id="save-prefs-btn">Save Settings</button>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════
+     VIEW: incidents  (history + replay)
+════════════════════════════════════════════ -->
+<div id="view-incidents" class="view">
+  <div class="page-content">
+    <div class="page-header">
+      <h2>Incident History</h2>
+      <p class="page-sub">Tap an incident to replay its movement timeline.</p>
+    </div>
+    <div id="incident-list" class="incident-list">
+      <div class="empty-state">No incidents recorded yet.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════
+     MODAL: Add Device
+════════════════════════════════════════════ -->
+<div id="device-modal" class="modal-overlay hidden">
+  <div class="modal-box">
+    <div class="modal-title">Register a Device</div>
+    <div class="field">
+      <label>Device Nickname</label>
+      <input id="dev-name" type="text" placeholder="My Wristband">
+    </div>
+    <p class="modal-hint">
+      A unique Device ID will be generated automatically:<br>
+      <code id="dev-id-preview" class="id-preview">—</code>
+    </p>
+    <div class="modal-actions">
+      <button class="btn-primary" id="confirm-add-device">Register</button>
+      <button class="btn-ghost" id="cancel-add-device">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Config: set these before app.js loads. Edit the widgetId below, or leave
+     BACKEND_URL as-is if the backend runs on the same machine at :8000 -->
+<script>
+  window.RESQNET_BACKEND_URL   = "http://127.0.0.1:8000";
+  window.RESQNET_MSG91_WIDGET_ID = "";  // ← paste your MSG91 widgetId here
+</script>
+
+<!-- MSG91 widget script — loaded dynamically by app.js after login -->
+<script src="app.js"></script>
+</body>
+</html>
