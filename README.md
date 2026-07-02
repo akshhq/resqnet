@@ -428,7 +428,7 @@ Personal dashboard for the device owner:
 
 ### Dashboard 2 — Emergency Responder Dashboard
 For trusted contacts receiving the alert:
-- One-time session token sent via SMS on emergency trigger (no password needed in a crisis)
+- One-time session token sent via SMS/Mail on emergency trigger (no password needed in a crisis)
 - Live map with movement trail and speed context
 - "I'm on my way" acknowledgement button
 - Live audio stream from device microphone (with user consent)

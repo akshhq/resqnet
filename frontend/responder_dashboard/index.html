@@ -14,9 +14,9 @@
   <div class="empty-inner">
     <div class="empty-icon">🛡</div>
     <h1>ResQNet Responder</h1>
-    <p>No active emergency. Open a responder link to begin.</p>
+    <p>No active emergency. A one-time link is sent by SMS or email the moment someone you're a trusted contact for triggers an alert — no login required, no password to remember mid-crisis.</p>
     <div class="empty-demo">
-      <p class="empty-hint">For testing, enter a device ID to monitor:</p>
+      <p class="empty-hint">For testing, enter a device ID to simulate opening a responder link:</p>
       <div class="empty-row">
         <input id="demo-device-id" placeholder="e.g. DEV_1234567890" />
         <button onclick="loadDevice()">Monitor</button>
@@ -42,11 +42,26 @@
       <span class="meta-label">Active for</span>
       <span class="meta-value" id="header-duration">—</span>
     </div>
+    <div id="session-meta">
+      <span class="session-icon">🔑</span>
+      <span class="meta-label">Session</span>
+      <span class="meta-value" id="session-expiry">Active</span>
+    </div>
     <div id="conn-status">
       <span id="conn-dot" class="dot"></span>
       <span id="conn-label">Connecting…</span>
     </div>
   </header>
+
+  <!-- ── Session expired overlay ──────────────────────────────────────── -->
+  <div id="session-expired-overlay" hidden>
+    <div class="expired-box">
+      <div class="expired-icon">🔒</div>
+      <h2>Session expired</h2>
+      <p>This responder link was valid for 30 minutes after the incident was resolved. Live updates have stopped.</p>
+      <p class="expired-note">If a new emergency is triggered, a new link will be sent to your phone or email.</p>
+    </div>
+  </div>
 
   <!-- ── Emergency banner ──────────────────────────────────────────── -->
   <div id="emergency-banner" class="banner-normal">
@@ -214,37 +229,40 @@
         </div>
       </section>
 
-      <!-- Audio stub -->
+      <!-- Audio — device mic stream, consent-gated -->
       <section class="panel-card" id="audio-card">
-        <div class="card-title">Live audio</div>
+        <div class="card-title">Live audio <span class="consent-badge" id="consent-badge">Consent required</span></div>
         <div id="audio-status">
           <div class="audio-wave" id="audio-wave">
             <span></span><span></span><span></span><span></span><span></span>
           </div>
-          <div id="audio-label">Unavailable</div>
-          <div class="audio-note">Audio streaming requires backend support (coming soon)</div>
+          <div id="audio-label">Feed unavailable</div>
+          <div class="audio-note" id="audio-note">
+            Streams from the device's microphone only if the user enabled audio consent at setup.
+            Requires WebRTC signaling on the backend — not yet wired.
+          </div>
         </div>
         <div class="audio-btns">
-          <button class="audio-btn" disabled>▶ Start listening</button>
-          <button class="audio-btn" disabled>■ Stop</button>
+          <button class="audio-btn" id="audio-start-btn" disabled>▶ Start listening</button>
+          <button class="audio-btn" id="audio-stop-btn" disabled>■ Stop</button>
         </div>
       </section>
 
-      <!-- Responder presence stub -->
+      <!-- Responder presence -->
       <section class="panel-card" id="presence-card">
         <div class="card-title">Responders</div>
         <div id="presence-count">
           <span id="presence-num">1</span>
-          <span class="presence-label">viewing this incident</span>
+          <span class="presence-label">currently viewing</span>
         </div>
         <div id="presence-list">
           <div class="presence-item presence-you">
             <div class="presence-dot"></div>
             <span>You</span>
-            <span class="presence-badge">This device</span>
+            <span class="presence-badge">This session</span>
           </div>
         </div>
-        <div class="presence-note">Multi-responder sync requires backend support (coming soon)</div>
+        <div class="presence-note">Live presence sync needs a backend channel — currently shows only this session.</div>
       </section>
 
       <!-- On-my-way log -->

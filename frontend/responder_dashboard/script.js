@@ -33,6 +33,18 @@ let prevLng        = null;
 let staleTimer     = null;   // timeout to mark connection stale
 let durationTimer  = null;
 
+// ── Session expiry ──────────────────────────────────────────────────────
+// [REAL BACKEND NEEDED]: in production, the responder link itself is a
+// signed, time-limited token (?incident=INC-xxx&token=xxx) that the SERVER
+// rejects once expired. This client-side timer approximates that behaviour
+// for now — it stops rendering live data 30 minutes after reset, but it is
+// NOT a security boundary. Anyone with the raw device_id can still query
+// the backend directly until server-side token expiry exists.
+const SESSION_GRACE_AFTER_RESET_MS = 30 * 60 * 1000; // 30 minutes
+let sessionExpiresAt = null;   // epoch ms, set once reset is observed
+let sessionTimer     = null;
+let sessionExpired    = false;
+
 // Timeline entries array — newest first
 const timelineEntries = [];
 
@@ -133,9 +145,58 @@ function startDurationTimer() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Session expiry — 30 minutes after the incident is reset
+// ─────────────────────────────────────────────────────────────────────────────
+function armSessionExpiry() {
+  if (sessionExpiresAt) return;   // already armed, don't restart the clock
+  sessionExpiresAt = Date.now() + SESSION_GRACE_AFTER_RESET_MS;
+
+  const badge = document.getElementById("session-meta");
+  badge.classList.add("session-warning");
+
+  clearInterval(sessionTimer);
+  sessionTimer = setInterval(updateSessionCountdown, 1000);
+  updateSessionCountdown();
+}
+
+function updateSessionCountdown() {
+  if (!sessionExpiresAt) return;
+  const remainingMs = sessionExpiresAt - Date.now();
+
+  if (remainingMs <= 0) {
+    expireSession();
+    return;
+  }
+
+  const mins = Math.floor(remainingMs / 60000);
+  const secs = Math.floor((remainingMs % 60000) / 1000);
+  document.getElementById("session-expiry").textContent =
+    `${mins}:${String(secs).padStart(2, "0")}`;
+}
+
+function expireSession() {
+  if (sessionExpired) return;
+  sessionExpired = true;
+
+  clearInterval(sessionTimer);
+  clearInterval(durationTimer);
+  clearTimeout(staleTimer);
+
+  document.getElementById("session-expiry").textContent = "Expired";
+
+  // Close the live connection — no more updates should render
+  if (ws) { ws.onclose = null; ws.close(); }
+
+  document.getElementById("session-expired-overlay").hidden = false;
+  addTimelineEntry("🔒 Session expired — 30 min after resolution", "amber");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Update all UI from a payload broadcast
 // ─────────────────────────────────────────────────────────────────────────────
 function applyPayload(data) {
+  if (sessionExpired) return;   // session closed — ignore any further data
+
   lastPayload = data;
   lastUpdateTs = Date.now();
 
@@ -212,6 +273,7 @@ function applyPayload(data) {
     addTimelineEntry("Incident resolved — device reset", "green");
     document.body.classList.add("resolved");
     updateBannerResolved();
+    armSessionExpiry();   // starts the 30-minute countdown to session close
   }
 
   // ── Emergency start ──
@@ -485,6 +547,14 @@ async function loadDevice(idOverride) {
   deviceId     = id;
   incidentStart = Math.floor(Date.now() / 1000);
 
+  // Fresh session — clear any prior expiry state
+  sessionExpired   = false;
+  sessionExpiresAt = null;
+  clearInterval(sessionTimer);
+  document.getElementById("session-expiry").textContent = "Active";
+  document.getElementById("session-meta").classList.remove("session-warning");
+  document.getElementById("session-expired-overlay").hidden = true;
+
   // Show dashboard, hide empty state
   document.getElementById("empty-state").hidden    = true;
   document.getElementById("dashboard").hidden      = false;
@@ -580,6 +650,49 @@ async function fetchHistory(id) {
     loadDevice(device);
   }
 })();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Live audio — consent-gated device mic stream
+// [STUB]: Real version needs the DEVICE's mic streamed via WebRTC/backend
+// signaling, gated on consent the USER granted when they set up ResQNet
+// (not consent asked here in the browser). This demo button simulates the
+// consent-and-connect UX pattern only — it does not stream real device audio.
+// ─────────────────────────────────────────────────────────────────────────────
+let audioSimActive = false;
+
+function initAudioDemo() {
+  const startBtn = document.getElementById("audio-start-btn");
+  const stopBtn  = document.getElementById("audio-stop-btn");
+  if (!startBtn) return;
+
+  startBtn.disabled = false;
+  startBtn.title = "Demo only — device audio streaming requires backend WebRTC signaling";
+
+  startBtn.addEventListener("click", () => {
+    if (audioSimActive) return;
+    audioSimActive = true;
+
+    document.getElementById("audio-wave").classList.add("active");
+    document.getElementById("audio-label").textContent = "Connected (demo)";
+    document.getElementById("consent-badge").textContent = "Consent on file";
+    document.getElementById("consent-badge").classList.add("granted");
+    startBtn.disabled = true;
+    stopBtn.disabled = false;
+    addTimelineEntry("🎧 Responder connected to live audio (demo)", "blue");
+  });
+
+  stopBtn.addEventListener("click", () => {
+    if (!audioSimActive) return;
+    audioSimActive = false;
+
+    document.getElementById("audio-wave").classList.remove("active");
+    document.getElementById("audio-label").textContent = "Feed unavailable";
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
+    addTimelineEntry("🎧 Audio disconnected", "blue");
+  });
+}
+document.addEventListener("DOMContentLoaded", initAudioDemo);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Audio alert

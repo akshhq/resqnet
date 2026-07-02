@@ -115,6 +115,18 @@ body {
 .meta-value { font-size: 13px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
 .meta-sep   { color: var(--text-mut); }
 
+#session-meta {
+  display: flex; align-items: center; gap: 6px;
+  padding: 3px 10px;
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  border-radius: 20px;
+  flex-shrink: 0;
+}
+#session-meta.session-warning { border-color: var(--amber); }
+#session-meta.session-warning .meta-value { color: var(--amber); }
+.session-icon { font-size: 11px; }
+
 #conn-status { display: flex; align-items: center; gap: 7px; flex-shrink: 0; }
 .dot {
   width: 8px; height: 8px; border-radius: 50%;
@@ -553,6 +565,42 @@ body {
 }
 .onway-who { font-weight: 600; color: var(--green); }
 .onway-ts  { font-size: 10px; color: var(--text-mut); margin-top: 2px; }
+
+/* ── Session expired overlay ──────────────────────────────────────────── */
+#session-expired-overlay {
+  position: fixed; inset: 0; z-index: 2500;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(6,10,18,0.94);
+  backdrop-filter: blur(4px);
+}
+.expired-box {
+  max-width: 380px;
+  text-align: center;
+  padding: 32px;
+}
+.expired-icon { font-size: 40px; margin-bottom: 14px; }
+.expired-box h2 { font-size: 18px; font-weight: 700; color: var(--text); margin-bottom: 10px; }
+.expired-box p { font-size: 13px; color: var(--text-sec); line-height: 1.6; margin-bottom: 8px; }
+.expired-note { font-size: 11px; color: var(--text-mut); }
+
+/* ── Consent badge ────────────────────────────────────────────────────── */
+.consent-badge {
+  font-size: 9px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background: rgba(245,158,11,0.12);
+  color: var(--amber);
+  border: 1px solid rgba(245,158,11,0.25);
+  text-transform: none;
+  letter-spacing: 0;
+  margin-left: auto;
+}
+.consent-badge.granted {
+  background: rgba(34,197,94,0.12);
+  color: var(--green);
+  border-color: rgba(34,197,94,0.25);
+}
 
 /* ── Call dialog ──────────────────────────────────────────────────────── */
 #call-dialog {
