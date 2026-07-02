@@ -126,11 +126,19 @@ body {
 .otp-title { text-align: center; font-size: 20px; margin-bottom: 6px; }
 .otp-sub   { text-align: center; font-size: 13px; color: var(--text-muted); margin-bottom: 20px; }
 
-#msg91-widget-container {
-  min-height: 80px;
-  display: flex; align-items: center; justify-content: center;
+#otp-input-container {
+  width: 100%;
   margin-bottom: 12px;
 }
+.otp-code-field {
+  width: 100%; text-align: center;
+  font-size: 22px; letter-spacing: 8px;
+  padding: 12px;
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); color: var(--text);
+  margin-bottom: 12px;
+}
+.otp-code-field:focus { outline: none; border-color: var(--accent); }
 
 /* ── Page content (shared by home, contacts, preferences, incidents) ── */
 .page-content {

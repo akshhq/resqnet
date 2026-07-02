@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.auth import verify_api_key
 from app.schemas import (
-    UserRegister, Msg91TokenVerify,
+    UserRegister, EmailOtpRequest, EmailOtpVerify,
     EmergencyContactIn, EmergencyContactUpdate,
     DeviceRegisterForUser, PreferencesUpdate,
 )
@@ -26,24 +26,28 @@ router = APIRouter(prefix="/user", tags=["user"])
 
 
 # ---------------------------------------------------------------------------
-# Registration + MSG91 OTP verification
+# Registration + Login — email-based verification
 #
 # How this works with the frontend:
-#   1. User fills registration form → frontend calls POST /user/register
-#      (this creates the DB row but does NOT send any OTP)
-#   2. Frontend loads MSG91 widget JS → calls window.sendOtp(phone)
-#      → MSG91 sends the SMS directly, no backend involvement
-#   3. User enters code → window.verifyOtp(code) → MSG91 returns access_token
-#   4. Frontend calls POST /user/verify-otp with that access_token
-#   5. Backend verifies the token with MSG91's server API → activates account
+#   1. Register: user fills form → POST /user/register creates the DB row
+#      AND immediately calls send_email_otp() — no separate trigger needed
+#      from the frontend, unlike the old MSG91 flow.
+#   2. Login: user enters just their email → POST /user/login checks the
+#      account exists and is verified, then sends a fresh code the same way.
+#   3. Either path ends the same way: user reads the code from their inbox,
+#      submits it to POST /user/verify-otp with {email, code, purpose}.
+#   4. Delivery itself happens out-of-band: send_email_otp() only enqueues
+#      a row in email_queue. A Google Apps Script (external to this
+#      codebase) polls GET /email-queue/pending and actually sends the
+#      email via GmailApp, then reports back via mark-sent/mark-failed.
+#      See EMAIL_QUEUE_INTEGRATION.md for that contract.
 # ---------------------------------------------------------------------------
 
 @router.post("/register", dependencies=[Depends(verify_api_key)])
 async def register_user(data: UserRegister):
     """
-    Creates the user row with phone_verified=False.
-    OTP is handled entirely client-side via MSG91 widget JS —
-    this endpoint does NOT send any SMS.
+    Creates the user row (verified=False) and immediately enqueues a
+    registration verification email.
     """
     try:
         user = await user_db.create_user(data.name, data.dob, data.phone, data.email)
@@ -53,51 +57,78 @@ async def register_user(data: UserRegister):
             detail="A user with this phone number, email, or name+DOB combination already exists."
         )
 
-    return {
-        "status": "registered",
-        "user_id": user["user_id"],
-        "message": "Account created. Verify your phone number to activate it.",
-    }
-
-
-@router.post("/verify-otp", dependencies=[Depends(verify_api_key)])
-async def verify_otp_route(data: Msg91TokenVerify):
-    """
-    Receives the access_token that MSG91's widget JS returns after the user
-    successfully enters their OTP code. Calls MSG91's server-side API to
-    confirm the token is genuine, then marks the user's phone as verified.
-    """
     try:
-        result = await user_db.verify_msg91_token(data.access_token)
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        await user_db.send_email_otp(data.email, purpose="registration", to_name=data.name)
     except RuntimeError as e:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e))
 
-    # MSG91 returns the phone number (identifier) in the response —
-    # use it to find and activate the right user.
-    phone = result.get("identifier", "").strip()
-    if not phone:
+    return {
+        "status": "otp_sent",
+        "user_id": user["user_id"],
+        "message": "Account created. Check your email for a verification code.",
+    }
+
+
+@router.post("/login", dependencies=[Depends(verify_api_key)])
+async def login_user(data: EmailOtpRequest):
+    """
+    Passwordless login, step 1: confirms the account exists and is
+    verified, then sends a fresh code to that email.
+    """
+    user = await user_db.get_user_by_email(data.email)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                             detail="No account found for that email. Register first.")
+    if not user["verified"]:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                             detail="This account has not completed registration verification yet.")
+
+    try:
+        await user_db.send_email_otp(data.email, purpose="login", to_name=user["name"])
+    except RuntimeError as e:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e))
+
+    return {"status": "otp_sent", "message": "Check your email for a login code."}
+
+
+@router.post("/resend-otp", dependencies=[Depends(verify_api_key)])
+async def resend_otp(data: EmailOtpRequest):
+    """Re-sends a fresh code for either purpose ('registration' or 'login')."""
+    user = await user_db.get_user_by_email(data.email)
+    try:
+        await user_db.send_email_otp(
+            data.email, purpose=data.purpose,
+            to_name=user["name"] if user else None,
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e))
+    return {"status": "otp_sent"}
+
+
+@router.post("/verify-otp", dependencies=[Depends(verify_api_key)])
+async def verify_otp_route(data: EmailOtpVerify):
+    """
+    Verifies the code the user read from their email. On purpose=
+    'registration' this also activates the account (verified=True).
+    """
+    ok = await user_db.verify_email_otp(data.email, data.code, purpose=data.purpose)
+    if not ok:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="MSG91 did not return a phone number in the token payload."
+            detail="Invalid or expired code."
         )
 
-    # Normalise: MSG91 strips the leading + so "+919876543210" comes back as "919876543210"
-    # Our DB stores numbers with the + prefix. Try both.
-    user = await user_db.get_user_by_phone(f"+{phone}") or await user_db.get_user_by_phone(phone)
+    user = await user_db.get_user_by_email(data.email)
     if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"No registered user found for phone {phone}. Register first."
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
 
-    await user_db.mark_phone_verified(user["user_id"])
+    if data.purpose == "registration":
+        await user_db.mark_verified(user["user_id"])
 
     return {
         "status": "verified",
         "user_id": user["user_id"],
-        "message": "Phone verified. Account is now active.",
+        "message": "Verified.",
     }
 
 

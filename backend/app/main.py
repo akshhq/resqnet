@@ -33,6 +33,7 @@ from app.auth import verify_api_key, verify_ws_token, rate_limit_exceeded_handle
 from app import db
 from app import user_db
 from app.user_routes import router as user_router
+from app.email_queue_routes import router as email_queue_router
 
 
 # ---------------------------------------------------------------------------
@@ -105,6 +106,9 @@ manager = ConnectionManager()
 
 # User Dashboard routes (registration, OTP, contacts, devices, preferences, incidents)
 app.include_router(user_router)
+
+# Email queue routes — polled by the external Google Apps Script sender
+app.include_router(email_queue_router)
 
 
 # ---------------------------------------------------------------------------

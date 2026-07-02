@@ -45,11 +45,11 @@
     <!-- Login -->
     <div id="tab-login" class="auth-form active">
       <div class="field">
-        <label>Phone Number</label>
-        <input id="login-phone" type="tel" placeholder="+91 98765 43210">
+        <label>Email Address</label>
+        <input id="login-email" type="email" placeholder="you@example.com">
       </div>
-      <button class="btn-primary" id="login-btn">Send OTP</button>
-      <p class="auth-hint">We'll send a verification code to your phone.</p>
+      <button class="btn-primary" id="login-btn">Send Code</button>
+      <p class="auth-hint">We'll email a verification code to sign you in.</p>
     </div>
 
     <!-- Register -->
@@ -84,8 +84,13 @@
     <h2 class="otp-title">Verify Your Phone</h2>
     <p class="otp-sub" id="otp-hint">Enter the 6-digit code sent to your number.</p>
 
-    <!-- MSG91 widget renders into this div -->
-    <div id="msg91-widget-container"></div>
+    <!-- Verification code input, submitted to POST /user/verify-otp -->
+    <div id="otp-input-container">
+      <input id="otp-code-input" type="text" inputmode="numeric" maxlength="6"
+             placeholder="••••••" class="otp-code-field">
+      <button class="btn-primary" id="otp-submit-btn">Verify Code</button>
+      <button class="btn-ghost btn-sm" id="otp-resend-btn" style="width:100%;margin-top:8px;">Resend Code</button>
+    </div>
 
     <button class="btn-ghost" id="otp-back-btn">← Back</button>
   </div>
@@ -260,14 +265,11 @@
   </div>
 </div>
 
-<!-- Config: set these before app.js loads. Edit the widgetId below, or leave
-     BACKEND_URL as-is if the backend runs on the same machine at :8000 -->
+<!-- Config: set this before app.js loads if your backend runs elsewhere -->
 <script>
-  window.RESQNET_BACKEND_URL   = "http://127.0.0.1:8000";
-  window.RESQNET_MSG91_WIDGET_ID = "";  // ← paste your MSG91 widgetId here
+  window.RESQNET_BACKEND_URL = "http://127.0.0.1:8000";
 </script>
 
-<!-- MSG91 widget script — loaded dynamically by app.js after login -->
 <script src="app.js"></script>
 </body>
 </html>

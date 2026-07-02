@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ResQNet — Emergency Response</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="loading">
+
+<!-- ── No-incident empty state ─────────────────────────────────────── -->
+<div id="empty-state">
+  <div class="empty-inner">
+    <div class="empty-icon">🛡</div>
+    <h1>ResQNet Responder</h1>
+    <p>No active emergency. Open a responder link to begin.</p>
+    <div class="empty-demo">
+      <p class="empty-hint">For testing, enter a device ID to monitor:</p>
+      <div class="empty-row">
+        <input id="demo-device-id" placeholder="e.g. DEV_1234567890" />
+        <button onclick="loadDevice()">Monitor</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Main dashboard (hidden until a device is loaded) ───────────── -->
+<div id="dashboard" hidden>
+
+  <!-- ── Header ────────────────────────────────────────────────────── -->
+  <header id="top-bar">
+    <div class="brand">
+      <span class="brand-icon">🛡</span>
+      <span class="brand-name">ResQNet</span>
+      <span class="brand-sub">Emergency Response</span>
+    </div>
+    <div id="incident-meta">
+      <span class="meta-label">Device</span>
+      <span class="meta-value" id="header-device-id">—</span>
+      <span class="meta-sep">·</span>
+      <span class="meta-label">Active for</span>
+      <span class="meta-value" id="header-duration">—</span>
+    </div>
+    <div id="conn-status">
+      <span id="conn-dot" class="dot"></span>
+      <span id="conn-label">Connecting…</span>
+    </div>
+  </header>
+
+  <!-- ── Emergency banner ──────────────────────────────────────────── -->
+  <div id="emergency-banner" class="banner-normal">
+    <div class="banner-left">
+      <span id="banner-icon">🟢</span>
+      <div>
+        <div id="banner-title">Monitoring</div>
+        <div id="banner-sub">No active emergency</div>
+      </div>
+    </div>
+    <div class="banner-right">
+      <div class="banner-stat">
+        <span class="bstat-label">Risk</span>
+        <span id="banner-risk" class="bstat-val">Normal</span>
+      </div>
+      <div class="banner-stat">
+        <span class="bstat-label">Context</span>
+        <span id="banner-context" class="bstat-val">—</span>
+      </div>
+      <div class="banner-stat">
+        <span class="bstat-label">Speed</span>
+        <span id="banner-speed" class="bstat-val">—</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Body ──────────────────────────────────────────────────────── -->
+  <div id="body-grid">
+
+    <!-- ── Left panel ──────────────────────────────────────────────── -->
+    <aside id="left-panel">
+
+      <!-- Device info card -->
+      <section class="panel-card" id="device-card">
+        <div class="card-title">Device</div>
+        <div class="info-grid">
+          <div class="info-row"><span class="il">Battery</span><span class="iv" id="inf-battery">—</span></div>
+          <div class="info-row"><span class="il">Speed</span><span class="iv" id="inf-speed">—</span></div>
+          <div class="info-row"><span class="il">Context</span><span class="iv" id="inf-context">—</span></div>
+          <div class="info-row"><span class="il">Risk</span><span class="iv" id="inf-risk">—</span></div>
+          <div class="info-row"><span class="il">Latitude</span><span class="iv mono" id="inf-lat">—</span></div>
+          <div class="info-row"><span class="il">Longitude</span><span class="iv mono" id="inf-lng">—</span></div>
+          <div class="info-row"><span class="il">Last update</span><span class="iv" id="inf-lastseen">—</span></div>
+        </div>
+        <div id="battery-bar-wrap">
+          <div id="battery-bar"></div>
+        </div>
+      </section>
+
+      <!-- Connectivity chain -->
+      <section class="panel-card" id="conn-chain-card">
+        <div class="card-title">Connection chain</div>
+        <div class="chain">
+          <div class="chain-node" id="cn-device">
+            <div class="cn-dot"></div>
+            <div class="cn-label">Device</div>
+          </div>
+          <div class="chain-line"></div>
+          <div class="chain-node" id="cn-cloud">
+            <div class="cn-dot"></div>
+            <div class="cn-label">Backend</div>
+          </div>
+          <div class="chain-line"></div>
+          <div class="chain-node" id="cn-dashboard">
+            <div class="cn-dot"></div>
+            <div class="cn-label">Dashboard</div>
+          </div>
+        </div>
+        <div id="conn-stale-msg" hidden>⚠ Showing last known data</div>
+      </section>
+
+      <!-- Stats row -->
+      <section class="panel-card" id="stats-card">
+        <div class="card-title">Incident stats</div>
+        <div class="stats-grid">
+          <div class="stat-box">
+            <div class="stat-val" id="st-duration">—</div>
+            <div class="stat-lbl">Duration</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-val" id="st-distance">0 m</div>
+            <div class="stat-lbl">Distance</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-val" id="st-alerts">0</div>
+            <div class="stat-lbl">Alerts</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-val" id="st-escalations">0</div>
+            <div class="stat-lbl">Escalations</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Incident notes -->
+      <section class="panel-card" id="notes-card">
+        <div class="card-title">Incident notes</div>
+        <div id="notes-list"></div>
+        <div class="note-quick">
+          <button class="note-pill" onclick="addNote('Police contacted')">Police contacted</button>
+          <button class="note-pill" onclick="addNote('Ambulance requested')">Ambulance requested</button>
+          <button class="note-pill" onclick="addNote('Family informed')">Family informed</button>
+          <button class="note-pill" onclick="addNote('User located')">User located</button>
+          <button class="note-pill" onclick="addNote('Situation under control')">Situation under control</button>
+        </div>
+        <div class="note-input-row">
+          <input id="note-input" placeholder="Custom note…" />
+          <button onclick="addNoteFromInput()">Add</button>
+        </div>
+      </section>
+
+    </aside>
+
+    <!-- ── Map + main content ───────────────────────────────────────── -->
+    <main id="main-col">
+
+      <!-- Map -->
+      <div id="map-wrap">
+        <div id="map"></div>
+        <div id="map-controls">
+          <button class="map-btn" onclick="recenterMap()" title="Re-center">⊙</button>
+          <button class="map-btn" onclick="openGoogleMaps()" title="Open in Google Maps">↗</button>
+        </div>
+        <div id="map-info-pill">
+          <span id="map-speed-label">—</span>
+          <span class="map-sep">·</span>
+          <span id="map-context-label">—</span>
+        </div>
+      </div>
+
+      <!-- Action buttons — always visible -->
+      <div id="action-bar">
+        <button id="btn-onway" class="action-btn action-onway" onclick="toggleOnMyWay()">
+          <span class="action-icon">🚗</span>
+          <span class="action-label">I'm on my way</span>
+        </button>
+        <button id="btn-call" class="action-btn action-call" onclick="callEmergency()">
+          <span class="action-icon">📞</span>
+          <span class="action-label">Call 112</span>
+        </button>
+        <button id="btn-share" class="action-btn action-share" onclick="shareLocation()">
+          <span class="action-icon">📍</span>
+          <span class="action-label">Share location</span>
+        </button>
+      </div>
+
+      <!-- Timeline -->
+      <section class="panel-card" id="timeline-card">
+        <div class="card-title">Timeline <span id="timeline-count" class="count-badge">0</span></div>
+        <div id="timeline-list"></div>
+      </section>
+
+    </main>
+
+    <!-- ── Right panel ──────────────────────────────────────────────── -->
+    <aside id="right-panel">
+
+      <!-- Alert status -->
+      <section class="panel-card" id="alert-card">
+        <div class="card-title">Alert level</div>
+        <div id="alert-level-display">
+          <div id="alert-ring" class="ring-normal">
+            <span id="alert-ring-text">Normal</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Audio stub -->
+      <section class="panel-card" id="audio-card">
+        <div class="card-title">Live audio</div>
+        <div id="audio-status">
+          <div class="audio-wave" id="audio-wave">
+            <span></span><span></span><span></span><span></span><span></span>
+          </div>
+          <div id="audio-label">Unavailable</div>
+          <div class="audio-note">Audio streaming requires backend support (coming soon)</div>
+        </div>
+        <div class="audio-btns">
+          <button class="audio-btn" disabled>▶ Start listening</button>
+          <button class="audio-btn" disabled>■ Stop</button>
+        </div>
+      </section>
+
+      <!-- Responder presence stub -->
+      <section class="panel-card" id="presence-card">
+        <div class="card-title">Responders</div>
+        <div id="presence-count">
+          <span id="presence-num">1</span>
+          <span class="presence-label">viewing this incident</span>
+        </div>
+        <div id="presence-list">
+          <div class="presence-item presence-you">
+            <div class="presence-dot"></div>
+            <span>You</span>
+            <span class="presence-badge">This device</span>
+          </div>
+        </div>
+        <div class="presence-note">Multi-responder sync requires backend support (coming soon)</div>
+      </section>
+
+      <!-- On-my-way log -->
+      <section class="panel-card" id="onway-card" hidden>
+        <div class="card-title">Acknowledgements</div>
+        <div id="onway-list"></div>
+      </section>
+
+    </aside>
+
+  </div><!-- /body-grid -->
+
+</div><!-- /dashboard -->
+
+<!-- ── Call 112 desktop dialog ──────────────────────────────────────── -->
+<div id="call-dialog" hidden>
+  <div class="dialog-overlay" onclick="closeCallDialog()"></div>
+  <div class="dialog-box">
+    <div class="dialog-icon">🆘</div>
+    <h2>Call emergency services</h2>
+    <p>Dial <strong>112</strong> immediately and share this location:</p>
+    <div class="dialog-coords" id="dialog-coords">—</div>
+    <div class="dialog-actions">
+      <a id="dialog-tel" href="tel:112" class="dialog-btn dialog-primary">Call 112</a>
+      <button class="dialog-btn dialog-secondary" onclick="closeCallDialog()">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Toast ────────────────────────────────────────────────────────── -->
+<div id="toast"></div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script src="script.js"></script>
+</body>
+</html>

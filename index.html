@@ -1,0 +1,870 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ResQNet — Response & Rescue Network</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #060a12;
+      --s1:       #0c1220;
+      --s2:       #111827;
+      --s3:       #1a2236;
+      --border:   rgba(255,255,255,0.06);
+      --border2:  rgba(255,255,255,0.11);
+      --text:     #e2e8f4;
+      --sec:      #7a8aa0;
+      --mut:      #384455;
+      --blue:     #3b82f6;
+      --blue-lo:  rgba(59,130,246,0.08);
+      --blue-mid: rgba(59,130,246,0.15);
+      --green:    #22c55e;
+      --red:      #ef4444;
+      --amber:    #f59e0b;
+      --purple:   #a78bfa;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 14px;
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+
+    /* ── Grid overlay (atmospheric) ── */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(59,130,246,0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(59,130,246,0.03) 1px, transparent 1px);
+      background-size: 40px 40px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* ── Nav ── */
+    nav {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      height: 52px;
+      background: rgba(6,10,18,0.88);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border2);
+      display: flex;
+      align-items: center;
+      padding: 0 24px;
+      gap: 20px;
+      z-index: 100;
+    }
+    .nav-brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--text);
+      text-decoration: none;
+    }
+    .nav-shield {
+      width: 26px; height: 26px;
+      background: var(--blue);
+      border-radius: 6px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 13px;
+    }
+    .nav-links {
+      display: flex;
+      gap: 4px;
+      margin-left: auto;
+    }
+    .nav-link {
+      font-size: 12px;
+      color: var(--sec);
+      text-decoration: none;
+      padding: 5px 10px;
+      border-radius: 5px;
+      transition: color 0.15s, background 0.15s;
+    }
+    .nav-link:hover { color: var(--text); background: var(--s3); }
+    .nav-badge {
+      font-size: 10px;
+      background: rgba(34,197,94,0.15);
+      color: var(--green);
+      padding: 1px 6px;
+      border-radius: 3px;
+      border: 1px solid rgba(34,197,94,0.25);
+      font-family: 'JetBrains Mono', monospace;
+      margin-left: 6px;
+    }
+
+    /* ── Main layout ── */
+    main {
+      position: relative;
+      z-index: 1;
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 0 24px 80px;
+    }
+
+    /* ── Hero ── */
+    .hero {
+      padding: 120px 0 64px;
+      display: grid;
+      grid-template-columns: 1fr 340px;
+      gap: 48px;
+      align-items: center;
+    }
+
+    .hero-eyebrow {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 20px;
+    }
+    .eyebrow-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 8px var(--green);
+      animation: pulse-dot 2s ease-in-out infinite;
+    }
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+    .eyebrow-text {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: var(--green);
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+
+    .hero h1 {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 48px;
+      font-weight: 700;
+      line-height: 1.1;
+      color: var(--text);
+      margin-bottom: 20px;
+      letter-spacing: -0.02em;
+    }
+    .hero h1 span {
+      color: var(--blue);
+    }
+
+    .hero-sub {
+      font-size: 16px;
+      color: var(--sec);
+      line-height: 1.7;
+      max-width: 480px;
+      margin-bottom: 32px;
+    }
+
+    .hero-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .btn-primary {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 20px;
+      background: var(--blue);
+      color: #fff;
+      text-decoration: none;
+      border-radius: 7px;
+      font-size: 13px;
+      font-weight: 600;
+      transition: background 0.15s, transform 0.1s;
+    }
+    .btn-primary:hover { background: #2563eb; transform: translateY(-1px); }
+    .btn-secondary {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 20px;
+      background: transparent;
+      color: var(--sec);
+      text-decoration: none;
+      border: 1px solid var(--border2);
+      border-radius: 7px;
+      font-size: 13px;
+      font-weight: 500;
+      transition: color 0.15s, border-color 0.15s, transform 0.1s;
+    }
+    .btn-secondary:hover { color: var(--text); border-color: var(--border2); transform: translateY(-1px); }
+
+    /* ── Hero stats panel ── */
+    .hero-stats {
+      background: var(--s1);
+      border: 1px solid var(--border2);
+      border-radius: 14px;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }
+    .stat-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .stat-row:last-child { border-bottom: none; }
+    .stat-icon {
+      width: 32px; height: 32px;
+      border-radius: 7px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 14px;
+      flex-shrink: 0;
+    }
+    .si-blue   { background: rgba(59,130,246,0.12); }
+    .si-green  { background: rgba(34,197,94,0.12); }
+    .si-amber  { background: rgba(245,158,11,0.12); }
+    .si-red    { background: rgba(239,68,68,0.12); }
+    .si-purple { background: rgba(167,139,250,0.12); }
+    .stat-label { font-size: 12px; color: var(--sec); }
+    .stat-val {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text);
+      margin-left: auto;
+    }
+    .stat-val.green  { color: var(--green); }
+    .stat-val.amber  { color: var(--amber); }
+    .stat-val.red    { color: var(--red); }
+
+    /* ── Section title ── */
+    .section-label {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--mut);
+      margin-bottom: 6px;
+    }
+    .section-title {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--text);
+      margin-bottom: 6px;
+    }
+    .section-sub {
+      font-size: 14px;
+      color: var(--sec);
+      margin-bottom: 28px;
+    }
+
+    /* ── Divider ── */
+    .divider {
+      height: 1px;
+      background: var(--border);
+      margin: 64px 0;
+    }
+
+    /* ── Dashboard cards ── */
+    .dash-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+
+    .dash-card {
+      background: var(--s1);
+      border: 1px solid var(--border2);
+      border-radius: 14px;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      text-decoration: none;
+      color: inherit;
+      transition: border-color 0.2s, transform 0.15s, background 0.2s;
+      position: relative;
+      overflow: hidden;
+    }
+    .dash-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 2px;
+      opacity: 0;
+      transition: opacity 0.2s;
+    }
+    .dash-card:hover {
+      transform: translateY(-2px);
+      border-color: var(--border2);
+      background: var(--s2);
+    }
+    .dash-card:hover::before { opacity: 1; }
+
+    .dc-blue::before   { background: var(--blue); }
+    .dc-green::before  { background: var(--green); }
+    .dc-amber::before  { background: var(--amber); }
+    .dc-red::before    { background: var(--red); }
+    .dc-purple::before { background: var(--purple); }
+
+    .dash-card.placeholder {
+      border-style: dashed;
+      border-color: var(--mut);
+      opacity: 0.7;
+      cursor: default;
+      pointer-events: none;
+    }
+    .dash-card.placeholder:hover { transform: none; }
+
+    .card-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .card-icon {
+      width: 40px; height: 40px;
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px;
+      flex-shrink: 0;
+    }
+    .ci-blue   { background: rgba(59,130,246,0.12); border: 1px solid rgba(59,130,246,0.2); }
+    .ci-green  { background: rgba(34,197,94,0.12);  border: 1px solid rgba(34,197,94,0.2); }
+    .ci-amber  { background: rgba(245,158,11,0.12); border: 1px solid rgba(245,158,11,0.2); }
+    .ci-red    { background: rgba(239,68,68,0.12);  border: 1px solid rgba(239,68,68,0.2); }
+    .ci-purple { background: rgba(167,139,250,0.12);border: 1px solid rgba(167,139,250,0.2); }
+    .ci-gray   { background: rgba(100,116,139,0.08);border: 1px solid rgba(100,116,139,0.15); }
+
+    .card-status {
+      font-size: 10px;
+      font-family: 'JetBrains Mono', monospace;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+    .cs-live     { background: rgba(34,197,94,0.1);  color: var(--green); border: 1px solid rgba(34,197,94,0.2); }
+    .cs-built    { background: rgba(59,130,246,0.1); color: var(--blue);  border: 1px solid rgba(59,130,246,0.2); }
+    .cs-wip      { background: rgba(245,158,11,0.1); color: var(--amber); border: 1px solid rgba(245,158,11,0.2); }
+    .cs-planned  { background: rgba(100,116,139,0.1);color: var(--sec);   border: 1px solid rgba(100,116,139,0.2); }
+
+    .card-body {}
+    .card-name {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--text);
+      margin-bottom: 5px;
+    }
+    .card-desc {
+      font-size: 12px;
+      color: var(--sec);
+      line-height: 1.6;
+    }
+
+    .card-features {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+    }
+    .feat-tag {
+      font-size: 10px;
+      padding: 2px 7px;
+      border-radius: 4px;
+      background: var(--s3);
+      color: var(--sec);
+      border: 1px solid var(--border);
+    }
+
+    .card-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-top: 12px;
+      border-top: 1px solid var(--border);
+    }
+    .card-path {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      color: var(--mut);
+    }
+    .card-arrow {
+      font-size: 14px;
+      color: var(--sec);
+      transition: transform 0.15s, color 0.15s;
+    }
+    .dash-card:hover .card-arrow {
+      transform: translateX(3px);
+      color: var(--text);
+    }
+
+    /* Wide card (trial dashboard) */
+    .dash-card.wide {
+      grid-column: 1 / -1;
+      flex-direction: row;
+      gap: 24px;
+      align-items: flex-start;
+    }
+    .dash-card.wide .card-body { flex: 1; }
+    .dash-card.wide .card-top { flex-direction: column; align-items: flex-start; gap: 8px; }
+    .wide-right {
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      justify-content: space-between;
+      height: 100%;
+      gap: 12px;
+    }
+
+    /* ── Stack section ── */
+    .stack-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+    }
+    .stack-item {
+      background: var(--s1);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .stack-layer {
+      font-size: 10px;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--mut);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .stack-name {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .stack-detail {
+      font-size: 11px;
+      color: var(--sec);
+    }
+
+    /* ── Status bar ── */
+    .status-bar {
+      background: var(--s1);
+      border: 1px solid var(--border2);
+      border-radius: 12px;
+      padding: 16px 20px;
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      flex-wrap: wrap;
+    }
+    .status-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--sec);
+    }
+    .status-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .sd-green { background: var(--green); box-shadow: 0 0 5px var(--green); }
+    .sd-amber { background: var(--amber); }
+    .sd-gray  { background: var(--mut); }
+    .status-val { color: var(--text); font-weight: 500; }
+    .status-bar-title {
+      font-size: 11px;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--mut);
+      margin-right: auto;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    /* ── Footer ── */
+    footer {
+      position: relative;
+      z-index: 1;
+      border-top: 1px solid var(--border);
+      padding: 28px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 20px;
+      flex-wrap: wrap;
+    }
+    .footer-brand {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--sec);
+    }
+    .footer-sep { color: var(--mut); }
+    .footer-link {
+      font-size: 12px;
+      color: var(--mut);
+      text-decoration: none;
+      transition: color 0.15s;
+    }
+    .footer-link:hover { color: var(--sec); }
+    .footer-note {
+      font-size: 11px;
+      color: var(--mut);
+    }
+
+    /* ── Responsive ── */
+    @media (max-width: 820px) {
+      .hero {
+        grid-template-columns: 1fr;
+        padding: 100px 0 48px;
+      }
+      .hero-stats { display: none; }
+      .hero h1 { font-size: 36px; }
+      .dash-grid { grid-template-columns: 1fr; }
+      .dash-card.wide { flex-direction: column; }
+      .stack-grid { grid-template-columns: 1fr 1fr; }
+      nav .nav-links { display: none; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .eyebrow-dot { animation: none; }
+      .btn-primary:hover, .btn-secondary:hover,
+      .dash-card:hover { transform: none; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Nav ─────────────────────────────────────────────────────────── -->
+<nav>
+  <a href="#" class="nav-brand">
+    <div class="nav-shield">🛡</div>
+    ResQNet
+  </a>
+  <div class="nav-links">
+    <a href="#dashboards" class="nav-link">Dashboards</a>
+    <a href="#stack" class="nav-link">Stack</a>
+    <a href="https://github.com/akshhq/resqnet" target="_blank" class="nav-link">GitHub ↗</a>
+    <a href="Trial_Dashboard/index.html" class="nav-link">
+      Live demo <span class="nav-badge">● LIVE</span>
+    </a>
+  </div>
+</nav>
+
+<!-- ── Main ─────────────────────────────────────────────────────────── -->
+<main>
+
+  <!-- ── Hero ────────────────────────────────────────────────────────── -->
+  <section class="hero">
+    <div class="hero-left">
+      <div class="hero-eyebrow">
+        <div class="eyebrow-dot"></div>
+        <span class="eyebrow-text">System operational · Backend live</span>
+      </div>
+      <h1>The device<br/>triggers the <span>alert.</span><br/>Not the app.</h1>
+      <p class="hero-sub">
+        ResQNet is a context-aware, device-independent emergency response system.
+        Real-time location tracking, automatic escalation, and live responder dashboards —
+        without needing a phone.
+      </p>
+      <div class="hero-actions">
+        <a href="Trial_Dashboard/index.html" class="btn-primary">
+          ▶ Open simulator dashboard
+        </a>
+        <a href="https://github.com/akshhq/resqnet" target="_blank" class="btn-secondary">
+          View on GitHub ↗
+        </a>
+      </div>
+    </div>
+
+    <!-- Live system stats panel -->
+    <div class="hero-stats">
+      <div class="stat-row">
+        <div class="stat-icon si-green">🛜</div>
+        <span class="stat-label">Backend</span>
+        <span class="stat-val green">● Live</span>
+      </div>
+      <div class="stat-row">
+        <div class="stat-icon si-blue">🗄</div>
+        <span class="stat-label">Database</span>
+        <span class="stat-val green">Neon Postgres</span>
+      </div>
+      <div class="stat-row">
+        <div class="stat-icon si-amber">⚡</div>
+        <span class="stat-label">WebSocket</span>
+        <span class="stat-val green">wss:// active</span>
+      </div>
+      <div class="stat-row">
+        <div class="stat-icon si-blue">📡</div>
+        <span class="stat-label">Escalation tiers</span>
+        <span class="stat-val">30s → 90s</span>
+      </div>
+      <div class="stat-row">
+        <div class="stat-icon si-red">🚨</div>
+        <span class="stat-label">Emergency latch</span>
+        <span class="stat-val">State-locked</span>
+      </div>
+      <div class="stat-row">
+        <div class="stat-icon si-purple">🔋</div>
+        <span class="stat-label">Hardware</span>
+        <span class="stat-val amber">ESP32 · In progress</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── System status bar ─────────────────────────────────────────── -->
+  <div class="status-bar" style="margin-bottom: 64px;">
+    <span class="status-bar-title">System status</span>
+    <div class="status-item">
+      <div class="status-dot sd-green"></div>
+      <span>API <span class="status-val">resqnet-gti8.onrender.com</span></span>
+    </div>
+    <div class="status-item">
+      <div class="status-dot sd-green"></div>
+      <span>DB <span class="status-val">Neon · us-east-2</span></span>
+    </div>
+    <div class="status-item">
+      <div class="status-dot sd-green"></div>
+      <span>Frontend <span class="status-val">GitHub Pages</span></span>
+    </div>
+    <div class="status-item">
+      <div class="status-dot sd-amber"></div>
+      <span>Auth <span class="status-val">Dev mode</span></span>
+    </div>
+    <div class="status-item">
+      <div class="status-dot sd-gray"></div>
+      <span>SMS <span class="status-val">Not configured</span></span>
+    </div>
+  </div>
+
+  <!-- ── Dashboards ───────────────────────────────────────────────── -->
+  <div id="dashboards">
+    <div class="section-label">Dashboards</div>
+    <div class="section-title">Five views, one system</div>
+    <div class="section-sub">Each dashboard serves a different role in the response chain.</div>
+
+    <div class="dash-grid">
+
+      <!-- Trial / Simulator — wide card, flagship -->
+      <a href="Trial_Dashboard/index.html" class="dash-card wide dc-blue">
+        <div class="card-top">
+          <div class="card-icon ci-blue">🖥</div>
+          <div class="card-status cs-live">● Live</div>
+        </div>
+        <div class="card-body">
+          <div class="card-name">Simulator Dashboard</div>
+          <div class="card-desc" style="margin-bottom:12px">
+            Add simulated devices, trigger panics, change movement modes, and watch the system respond in real time.
+            Wired to the live backend — every button press hits a real API endpoint.
+          </div>
+          <div class="card-features">
+            <span class="feat-tag">Device simulator</span>
+            <span class="feat-tag">Live WebSocket</span>
+            <span class="feat-tag">Movement modes</span>
+            <span class="feat-tag">Risk escalation</span>
+            <span class="feat-tag">Leaflet map</span>
+            <span class="feat-tag">Movement log</span>
+          </div>
+        </div>
+        <div class="wide-right">
+          <div></div>
+          <div class="card-footer" style="border:none;padding:0;flex-direction:column;align-items:flex-end;gap:4px">
+            <span class="card-path">Trial_Dashboard/</span>
+            <span class="card-arrow">Open →</span>
+          </div>
+        </div>
+      </a>
+
+      <!-- Responder dashboard -->
+      <a href="frontend/responder_dashboard/index.html" class="dash-card dc-red">
+        <div class="card-top">
+          <div class="card-icon ci-red">🆘</div>
+          <div class="card-status cs-built">Built</div>
+        </div>
+        <div class="card-body">
+          <div class="card-name">Responder Dashboard</div>
+          <div class="card-desc">
+            Temporary emergency command center opened from a responder link.
+            Live map, movement trail, escalation timeline, and one-tap emergency actions.
+          </div>
+        </div>
+        <div class="card-features">
+          <span class="feat-tag">Incident timeline</span>
+          <span class="feat-tag">I'm on my way</span>
+          <span class="feat-tag">Call 112</span>
+          <span class="feat-tag">Location share</span>
+          <span class="feat-tag">Incident notes</span>
+        </div>
+        <div class="card-footer">
+          <span class="card-path">frontend/responder_dashboard/</span>
+          <span class="card-arrow">Open →</span>
+        </div>
+      </a>
+
+      <!-- User dashboard -->
+      <a href="frontend/user_dashboard/index.html" class="dash-card dc-green">
+        <div class="card-top">
+          <div class="card-icon ci-green">👤</div>
+          <div class="card-status cs-wip">In progress</div>
+        </div>
+        <div class="card-body">
+          <div class="card-name">User Dashboard</div>
+          <div class="card-desc">
+            The person wearing the device manages their profile, trusted contacts,
+            device registration, and reviews their own incident history.
+          </div>
+        </div>
+        <div class="card-features">
+          <span class="feat-tag">Device register</span>
+          <span class="feat-tag">Contact setup</span>
+          <span class="feat-tag">Incident history</span>
+          <span class="feat-tag">Profile & medical info</span>
+        </div>
+        <div class="card-footer">
+          <span class="card-path">frontend/user_dashboard/</span>
+          <span class="card-arrow">Open →</span>
+        </div>
+      </a>
+
+      <!-- Admin dashboard — placeholder -->
+      <div class="dash-card placeholder dc-amber">
+        <div class="card-top">
+          <div class="card-icon ci-amber">⚙️</div>
+          <div class="card-status cs-planned">Planned</div>
+        </div>
+        <div class="card-body">
+          <div class="card-name">Admin Dashboard</div>
+          <div class="card-desc">
+            Manage all registered devices, view active incidents across the fleet,
+            pull Postgres audit logs, and configure system-wide settings.
+          </div>
+        </div>
+        <div class="card-features">
+          <span class="feat-tag">Device management</span>
+          <span class="feat-tag">Audit logs</span>
+          <span class="feat-tag">System config</span>
+          <span class="feat-tag">Incident archive</span>
+        </div>
+        <div class="card-footer">
+          <span class="card-path">frontend/admin_dashboard/</span>
+          <span class="card-arrow" style="opacity:0.3">Coming soon</span>
+        </div>
+      </div>
+
+      <!-- Operations dashboard — placeholder -->
+      <div class="dash-card placeholder dc-purple" style="grid-column: 1 / -1;">
+        <div class="card-top">
+          <div class="card-icon ci-purple">🗺</div>
+          <div class="card-status cs-planned">Planned</div>
+        </div>
+        <div class="card-body">
+          <div class="card-name">Operations Dashboard</div>
+          <div class="card-desc">
+            Multi-device command center for institutions — colleges, hospitals, logistics fleets.
+            All devices on one map, real-time fleet risk overview, and responder coordination across multiple simultaneous incidents.
+          </div>
+        </div>
+        <div class="card-features">
+          <span class="feat-tag">Fleet view</span>
+          <span class="feat-tag">Multi-incident</span>
+          <span class="feat-tag">Responder coordination</span>
+          <span class="feat-tag">Risk heatmap</span>
+          <span class="feat-tag">SLA tracking</span>
+        </div>
+        <div class="card-footer">
+          <span class="card-path">frontend/operations_dashboard/</span>
+          <span class="card-arrow" style="opacity:0.3">Coming soon</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- ── Tech stack ───────────────────────────────────────────────── -->
+  <div id="stack">
+    <div class="section-label">Architecture</div>
+    <div class="section-title">What it's built on</div>
+    <div class="section-sub">Every layer in production, no placeholders in the stack.</div>
+
+    <div class="stack-grid">
+      <div class="stack-item">
+        <div class="stack-layer">Backend</div>
+        <div class="stack-name">FastAPI + Uvicorn</div>
+        <div class="stack-detail">Async ASGI. WebSocket broadcast, REST endpoints, rate limiting via slowapi.</div>
+      </div>
+      <div class="stack-item">
+        <div class="stack-layer">Realtime</div>
+        <div class="stack-name">WebSocket (wss://)</div>
+        <div class="stack-detail">Live device state broadcast to all connected dashboards. Per-connection error handling.</div>
+      </div>
+      <div class="stack-item">
+        <div class="stack-layer">Database</div>
+        <div class="stack-name">Neon Postgres</div>
+        <div class="stack-detail">Circular buffer per device (500 rows). Emergency tables with 5-min pre-trigger context.</div>
+      </div>
+      <div class="stack-item">
+        <div class="stack-layer">Auth</div>
+        <div class="stack-name">API Key + WS Token</div>
+        <div class="stack-detail">X-API-Key header for REST, ?token= param for WebSocket. Currently in dev mode.</div>
+      </div>
+      <div class="stack-item">
+        <div class="stack-layer">Hosting</div>
+        <div class="stack-name">Render (free tier)</div>
+        <div class="stack-detail">Auto-deploy on push to main. HTTPS + WSS out of the box.</div>
+      </div>
+      <div class="stack-item">
+        <div class="stack-layer">Frontend</div>
+        <div class="stack-name">Vanilla HTML/CSS/JS</div>
+        <div class="stack-detail">No framework. Leaflet.js for maps. GitHub Pages + custom domain.</div>
+      </div>
+      <div class="stack-item">
+        <div class="stack-layer">Hardware</div>
+        <div class="stack-name">ESP32 + NEO-6M + SIM800L</div>
+        <div class="stack-detail">GPS + cellular fallback wearable. MPU-6050 for motion context. In progress.</div>
+      </div>
+      <div class="stack-item">
+        <div class="stack-layer">Intelligence</div>
+        <div class="stack-name">Context engine</div>
+        <div class="stack-detail">Speed → stationary / walking / running / vehicle. 30s + 90s auto-escalation tiers.</div>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<!-- ── Footer ───────────────────────────────────────────────────────── -->
+<footer>
+  <span class="footer-brand">🛡 ResQNet</span>
+  <span class="footer-sep">·</span>
+  <span class="footer-note">Response & Rescue Network</span>
+  <span class="footer-sep">·</span>
+  <a href="https://github.com/akshhq/resqnet" target="_blank" class="footer-link">GitHub ↗</a>
+  <span class="footer-sep">·</span>
+  <a href="https://resqnet-gti8.onrender.com/docs" target="_blank" class="footer-link">API docs ↗</a>
+  <span class="footer-sep">·</span>
+  <span class="footer-note">Built by Aksh · Keshav Mahavidyalaya, Delhi University</span>
+</footer>
+
+</body>
+</html>

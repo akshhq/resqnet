@@ -45,13 +45,27 @@ class UserRegister(BaseModel):
         return v
 
 
-class Msg91TokenVerify(BaseModel):
+class EmailOtpRequest(BaseModel):
+    """Used by POST /user/login and POST /user/resend-otp."""
+    email: EmailStr
+    purpose: str = Field(default="login", max_length=32)
+
+
+class EmailOtpVerify(BaseModel):
     """
-    Sent by the frontend after MSG91 widget JS calls window.verifyOtp()
-    successfully and returns an access_token.
-    The backend passes this token to MSG91's server-side API to confirm it.
+    Sent by the frontend after the user reads their emailed code and types
+    it in. purpose distinguishes a fresh registration (activates the
+    account) from an ordinary login (just needs a valid, matching code).
     """
-    access_token: str = Field(..., min_length=10)
+    email:   EmailStr
+    code:    str = Field(..., min_length=4, max_length=8)
+    purpose: str = Field(default="registration", max_length=32)
+
+
+class EmailQueueMarkFailed(BaseModel):
+    """Body for POST /email-queue/{id}/mark-failed — called by the Apps
+    Script sender when GmailApp.sendEmail() throws."""
+    error: str = Field(..., max_length=2000)
 
 
 class EmergencyContactIn(BaseModel):
