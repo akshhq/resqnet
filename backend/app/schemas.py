@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field, EmailStr, field_validator
 from datetime import date
 from typing import Optional
+from pydantic import BaseModel, Field
 
 
 class DeviceUpdate(BaseModel):
@@ -34,11 +35,12 @@ class DeviceRegister(BaseModel):
 # ---------------------------------------------------------------------------
 
 class UserRegister(BaseModel):
-    name:     str = Field(..., min_length=2, max_length=100)
-    dob:      date
-    phone:    str = Field(..., min_length=8, max_length=16)
-    email:    EmailStr
-    password: str = Field(..., min_length=8, max_length=128)
+    """Used by POST /user/register — create user account after email OTP verified."""
+    name: str = Field(..., min_length=1, max_length=100)
+    dob: str  # YYYY-MM-DD
+    phone: str = Field(..., min_length=10, max_length=15)
+    email: str = Field(..., min_length=5, max_length=255)
+    password: str = Field(..., min_length=8, max_length=255)
 
     @field_validator("phone")
     @classmethod
@@ -57,9 +59,9 @@ class UserRegister(BaseModel):
 
 
 class UserLogin(BaseModel):
-    """Password-based login — no OTP involved. Temporary until Firebase."""
-    email:    EmailStr
-    password: str = Field(..., min_length=1, max_length=128)
+    """Used by POST /user/login."""
+    email: str = Field(..., min_length=5, max_length=255)
+    password: str = Field(..., min_length=8, max_length=255)
 
 
 class EmailQueueMarkFailed(BaseModel):
@@ -103,3 +105,6 @@ class PreferencesUpdate(BaseModel):
     quiet_hours_start:      Optional[str] = Field(None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     quiet_hours_end:        Optional[str] = Field(None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     language:               Optional[str] = Field(None, min_length=2, max_length=8)
+
+
+

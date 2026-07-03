@@ -1,6 +1,8 @@
 import os
 from collections import deque
 from contextlib import asynccontextmanager
+import hashlib
+import secrets
 
 from dotenv import load_dotenv
 load_dotenv()   # loads backend/.env if present — must run before os.getenv() calls
@@ -12,7 +14,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from starlette.requests import Request
 
-from app.schemas import DeviceUpdate, DeviceRegister
+from app.schemas import DeviceUpdate, DeviceRegister, UserRegister, UserLogin
 from app.storage import (
     device_state,
     device_history,
@@ -31,9 +33,6 @@ from app.context import (
 from app.websocket import ConnectionManager
 from app.auth import verify_api_key, verify_ws_token, rate_limit_exceeded_handler
 from app import db
-from app import user_db
-from app.user_routes import router as user_router
-from app.email_queue_routes import router as email_queue_router
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +70,6 @@ async def lifespan(app: FastAPI):
         print("  All requests accepted — dev mode.")
 
     await db.init_db()
-    await user_db.init_user_tables()
     print("=" * 52)
     yield
     await db.close_db()
@@ -90,7 +88,7 @@ app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 # CORS
 _raw_origins = os.getenv(
     "CORS_ORIGINS",
-    "http://localhost:5500,http://127.0.0.1:5500"
+    "http://localhost:5500,http://127.0.0.1:5500,http://localhost:5501,http://127.0.0.1:5501"
 )
 ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 
@@ -104,15 +102,39 @@ app.add_middleware(
 
 manager = ConnectionManager()
 
-# User Dashboard routes (registration, OTP, contacts, devices, preferences, incidents)
-app.include_router(user_router)
 
-# Email queue routes — polled by the external Google Apps Script sender
-app.include_router(email_queue_router)
+# ---------------------------------------------------------------------------
+# User Management (in-memory for now — TODO: migrate to Postgres)
+# ---------------------------------------------------------------------------
+
+# In-memory user store: { user_id: { email, password_hash, name, dob, phone, ... } }
+users_db = {}
+next_user_id = 1000
+
+def hash_password(password: str) -> str:
+    """Hash password with a salt using SHA256. Simple but not bcrypt — good enough for now."""
+    salt = secrets.token_hex(16)
+    hashed = hashlib.sha256((salt + password).encode()).hexdigest()
+    return f"{salt}${hashed}"
+
+def verify_password(password: str, password_hash: str) -> bool:
+    """Verify a password against its hash."""
+    try:
+        salt, hashed = password_hash.split("$")
+        return hashlib.sha256((salt + password).encode()).hexdigest() == hashed
+    except:
+        return False
+
+def generate_user_id() -> str:
+    """Generate a unique user ID."""
+    global next_user_id
+    user_id = f"USER_{next_user_id}"
+    next_user_id += 1
+    return user_id
 
 
 # ---------------------------------------------------------------------------
-# 5.2 — WebSocket endpoint with token auth
+# Device endpoints
 # ---------------------------------------------------------------------------
 
 @app.websocket("/ws/live")
@@ -248,18 +270,6 @@ async def device_update(request: Request, data: DeviceUpdate):
     #    end timestamp. The table itself is never deleted.
     await db.insert_normal_log(data.device_id, payload)
 
-    # Keep the user-facing `devices` table in sync with live broadcast data,
-    # so the User Dashboard's device list shows real-time battery/status
-    # without needing a separate polling endpoint.
-    if db.db_enabled():
-        device_status = "emergency" if emergency_locked else "online"
-        await user_db.update_device_status(
-            data.device_id,
-            battery=data.battery,
-            last_seen=data.timestamp,
-            status=device_status,
-        )
-
     was_emergency_before = prev.get("emergency", False)
 
     if emergency_locked and not was_emergency_before:
@@ -305,3 +315,74 @@ def get_device(device_id: str):
 @limiter.limit("30/minute")   # 5.3: history fetches are heavier, lower cap
 def get_device_history(request: Request, device_id: str):
     return list(device_history.get(device_id, []))
+
+
+# ---------------------------------------------------------------------------
+# User Management Endpoints (no auth for now — email OTP is the gating)
+# ─────────────────────────────────────────────────────────────────────────
+# TODO: migrate users_db from in-memory to Neon Postgres users table
+# ---------------------------------------------------------------------------
+
+@app.post("/user/register")
+async def user_register(data: UserRegister):
+    """
+    Create a new ResQNet user account.
+    Call this AFTER the Google Apps Script has verified the email via OTP.
+    
+    Request: { name, dob, phone, email, password }
+    Response: { user_id, email }
+    """
+    # Check if email already registered
+    for user_id, user in users_db.items():
+        if user["email"].lower() == data.email.lower():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Email '{data.email}' is already registered."
+            )
+    
+    # Create new user
+    user_id = generate_user_id()
+    users_db[user_id] = {
+        "email": data.email,
+        "password_hash": hash_password(data.password),
+        "name": data.name,
+        "dob": data.dob,
+        "phone": data.phone,
+        "created_at": int(__import__("time").time())
+    }
+    
+    print(f"✅ User registered: {user_id} ({data.email})")
+    return {"user_id": user_id, "email": data.email}
+
+
+@app.post("/user/login")
+async def user_login(data: UserLogin):
+    """
+    Login with email + password.
+    Returns user_id if credentials are valid.
+    
+    Request: { email, password }
+    Response: { user_id, email, name }
+    """
+    # Find user by email
+    for user_id, user in users_db.items():
+        if user["email"].lower() == data.email.lower():
+            # Check password
+            if verify_password(data.password, user["password_hash"]):
+                print(f"✅ User login: {user_id} ({data.email})")
+                return {
+                    "user_id": user_id,
+                    "email": user["email"],
+                    "name": user.get("name", "")
+                }
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid email or password."
+                )
+    
+    # Email not found
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid email or password."
+    )
