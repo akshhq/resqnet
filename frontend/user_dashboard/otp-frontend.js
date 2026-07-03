@@ -22,8 +22,8 @@
 // Never treat the client-side decrypt result as the source of truth for
 // "is this user verified."
 
-const WEB_APP_URL = window.RESQNET_WEB_APP_URL || "PUT_YOUR_DEPLOYED_APPS_SCRIPT_WEB_APP_URL_HERE";
-const SHARED_KEY   = window.RESQNET_SHARED_KEY  || "REPLACE_WITH_A_LONG_RANDOM_SECRET_-_SHARE_ONLY_WITH_FRONTEND";
+const WEB_APP_URL = window.RESQNET_WEB_APP_URL || "https://script.google.com/macros/s/AKfycbxkTDAmuqGjeD9cjNKIZRwZ7CZvtIK-5Lpmump7ysVWyZ4DoVfRvtj0MyS1lHJCRE3N/exec";
+const SHARED_KEY   = window.RESQNET_SHARED_KEY  || "44eaa2e5b2dd6acee7cda2dce6f8499036cf272b761ad765970ec23fb385024d";
 
 let pendingRegId = null;
 let pendingExpiresAt = null;
