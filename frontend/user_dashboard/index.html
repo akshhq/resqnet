@@ -48,8 +48,11 @@
         <label>Email Address</label>
         <input id="login-email" type="email" placeholder="you@example.com">
       </div>
-      <button class="btn-primary" id="login-btn">Send Code</button>
-      <p class="auth-hint">We'll email a verification code to sign you in.</p>
+      <div class="field">
+        <label>Password</label>
+        <input id="login-password" type="password" placeholder="••••••••">
+      </div>
+      <button class="btn-primary" id="login-btn">Sign In</button>
     </div>
 
     <!-- Register -->
@@ -70,19 +73,23 @@
         <label>Email Address</label>
         <input id="reg-email" type="email" placeholder="you@example.com">
       </div>
+      <div class="field">
+        <label>Password</label>
+        <input id="reg-password" type="password" placeholder="At least 8 characters">
+      </div>
       <button class="btn-primary" id="register-btn">Create Account</button>
     </div>
   </div>
 </div>
 
 <!-- ════════════════════════════════════════════
-     VIEW: otp  (shown after login or register)
+     VIEW: otp  (registration only — email verification via Apps Script)
 ════════════════════════════════════════════ -->
 <div id="view-otp" class="view">
   <div class="auth-card">
     <div class="auth-logo">📲</div>
-    <h2 class="otp-title">Verify Your Phone</h2>
-    <p class="otp-sub" id="otp-hint">Enter the 6-digit code sent to your number.</p>
+    <h2 class="otp-title">Verify Your Email</h2>
+    <p class="otp-sub" id="otp-hint">Enter the 6-digit code sent to your email.</p>
 
     <!-- Verification code input, submitted to POST /user/verify-otp -->
     <div id="otp-input-container">
@@ -265,10 +272,21 @@
   </div>
 </div>
 
-<!-- Config: set this before app.js loads if your backend runs elsewhere -->
+<!-- Config: set these before the scripts below load -->
 <script>
   window.RESQNET_BACKEND_URL = "http://127.0.0.1:8000";
+
+  // Registration OTP is handled by a separate Google Apps Script web app
+  // (see OTP_Registration_Backend.gs). Paste your deployed Web App URL
+  // and the SHARED_KEY you set in that script's Script Properties.
+  window.RESQNET_WEB_APP_URL = "";  // ← paste your deployed Apps Script Web App URL here
+  window.RESQNET_SHARED_KEY  = "";  // ← must match SHARED_KEY in the Apps Script
 </script>
+
+<!-- Registration OTP client (talks to the Apps Script web app directly —
+     not to our backend). Must load before app.js, which calls its
+     registerUser()/verifyOtp()/resendOtp() functions. -->
+<script src="otp-frontend.js"></script>
 
 <script src="app.js"></script>
 </body>

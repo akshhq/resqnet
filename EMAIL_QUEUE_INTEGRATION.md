@@ -1,7 +1,16 @@
 # Email Queue Integration — Apps Script Contract
 
-This document is the HTTP contract between the ResQNet backend and the
-Google Apps Script you write to actually send emails via `GmailApp`. The
+> **Note:** registration OTP does **not** use this queue. Registration
+> verification is handled entirely by a separate, self-contained Apps
+> Script (`OTP_Registration_Backend.gs`) with its own Sheet, its own
+> `regId`, and its own OTP round-trip — the frontend talks to it directly
+> via `otp-frontend.js`, never through this backend. This document covers
+> a *different* mechanism: the generic outbound email queue reserved for
+> **Phase 4 emergency alerts** (and any other future transactional email
+> that doesn't need its own dedicated OTP-style flow).
+
+This document is the HTTP contract between the ResQNet backend and a
+Google Apps Script you write to send those emails via `GmailApp`. The
 backend never talks to Google directly — it only maintains a queue table
 in Postgres. Your script polls it, sends mail, and reports back.
 
@@ -69,24 +78,14 @@ pattern.
 
 ## `template_type` values
 
-Right now there's exactly one:
-
-### `email_otp`
-
-Used for both registration verification and login. `payload`:
-
-| Field | Type | Meaning |
-|---|---|---|
-| `code` | string | 6-digit verification code, e.g. `"755245"` |
-| `purpose` | string | `"registration"` or `"login"` — use this to vary the subject/copy if you want |
-| `expires_in_seconds` | int | Currently always `300` (5 minutes) |
-
-Suggested minimal email content: subject line with "ResQNet — Your Verification Code", body states the code in large text and that it expires in 5 minutes. No need for anything elaborate — a single code, clearly displayed, is enough. Feel free to reuse your `wrapEmail()` / `buildHeader()` style from the TRYST script with your `LOGO_URL` constant if you want it to look consistent with your other sends — that's entirely your call, the backend doesn't care about formatting.
+Right now there are none live yet — this queue is currently empty because
+nothing enqueues into it. It exists so Phase 4 doesn't need new
+infrastructure when it lands.
 
 ### `emergency_alert` (coming in Phase 4 — not live yet)
 
-When emergency notification dispatch is built, a second `template_type`
-will start appearing in the pending list: `emergency_alert`, carrying an
+When emergency notification dispatch is built, a `template_type` called
+`emergency_alert` will start appearing in the pending list, carrying an
 incident ID, device name, live location, and a responder dashboard link
 with an embedded token. Documented here once that phase lands so you can
 extend your script's `if/switch` on `template_type` rather than rewrite it.

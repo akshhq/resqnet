@@ -20,14 +20,25 @@ class DeviceRegister(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# User Dashboard — registration, OTP, contacts, devices, preferences
+# User Dashboard — registration, login, contacts, devices, preferences
+#
+# Registration OTP is handled entirely by an external Google Apps Script
+# web app (its own Sheet, its own regId, its own OTP round-trip) — this
+# backend is called ONLY after that Apps Script has already confirmed the
+# email via OTP. This endpoint's job is purely to create the ResQNet domain
+# record (user_id, password hash) once that proof already happened.
+#
+# Login is separate and uses a password — NOT OTP. See UserLogin below.
+# This password auth is a temporary stopgap; Firebase will eventually own
+# user login, at which point UserLogin/verify_login can be retired.
 # ---------------------------------------------------------------------------
 
 class UserRegister(BaseModel):
-    name:  str = Field(..., min_length=2, max_length=100)
-    dob:   date
-    phone: str = Field(..., min_length=8, max_length=16)
-    email: EmailStr
+    name:     str = Field(..., min_length=2, max_length=100)
+    dob:      date
+    phone:    str = Field(..., min_length=8, max_length=16)
+    email:    EmailStr
+    password: str = Field(..., min_length=8, max_length=128)
 
     @field_validator("phone")
     @classmethod
@@ -45,24 +56,14 @@ class UserRegister(BaseModel):
         return v
 
 
-class EmailOtpRequest(BaseModel):
-    """Used by POST /user/login and POST /user/resend-otp."""
-    email: EmailStr
-    purpose: str = Field(default="login", max_length=32)
-
-
-class EmailOtpVerify(BaseModel):
-    """
-    Sent by the frontend after the user reads their emailed code and types
-    it in. purpose distinguishes a fresh registration (activates the
-    account) from an ordinary login (just needs a valid, matching code).
-    """
-    email:   EmailStr
-    code:    str = Field(..., min_length=4, max_length=8)
-    purpose: str = Field(default="registration", max_length=32)
+class UserLogin(BaseModel):
+    """Password-based login — no OTP involved. Temporary until Firebase."""
+    email:    EmailStr
+    password: str = Field(..., min_length=1, max_length=128)
 
 
 class EmailQueueMarkFailed(BaseModel):
+
     """Body for POST /email-queue/{id}/mark-failed — called by the Apps
     Script sender when GmailApp.sendEmail() throws."""
     error: str = Field(..., max_length=2000)

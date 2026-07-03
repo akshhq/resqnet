@@ -4,19 +4,35 @@ incidents for ResQNet's User Dashboard.
 
 Schema overview
 ───────────────
-users                — one row per registered person
+users                — one row per registered person. Includes password_hash
+                        (temporary — Firebase will eventually own auth).
 emergency_contacts   — up to 3 per user, with priority + notification method
 devices              — one row per registered device, linked to a user
 user_preferences     — notification toggles + quiet hours, one row per user
 incidents            — one row per emergency event (created in Phase 4/5,
                         but the table is created now so the schema is whole)
-email_otp_codes      — short-lived verification codes, delivered by email
-email_queue          — outbound email jobs; a Google Apps Script (owned and
-                        written by the project author, not this codebase)
-                        polls GET /email-queue/pending and sends each one
-                        via GmailApp.sendEmail(), then reports back via
+email_queue          — outbound email jobs (Phase 4 emergency alerts); a
+                        Google Apps Script (owned and written by the project
+                        author, not this codebase) polls GET
+                        /email-queue/pending and sends each one via
+                        GmailApp.sendEmail(), then reports back via
                         POST /email-queue/{id}/mark-sent or mark-failed.
                         See EMAIL_QUEUE_INTEGRATION.md for the full contract.
+
+Registration OTP
+─────────────────
+OTP verification during signup is handled ENTIRELY by a separate Google
+Apps Script web app (its own Sheet, its own regId, its own OTP round-trip
+— see OTP_Registration_Backend.gs). This codebase is not involved in that
+exchange at all. The frontend only calls create_user() (via POST
+/user/register, see user_routes.py) AFTER the Apps Script's action=verify
+has already succeeded — this function's job is purely to create the
+ResQNet domain record (user_id, hashed password) once that proof exists.
+
+Login
+─────
+Login is password-based (temporary stopgap — Firebase will eventually
+replace this). It deliberately does NOT use OTP; OTP is registration-only.
 
 ID generation
 ─────────────
@@ -29,10 +45,13 @@ This file deliberately mirrors the patterns already established in db.py
 the two modules feel like one system rather than two different styles.
 """
 
+import hashlib
+import hmac
 import json
 import os
 import random
 import re
+import secrets
 import string
 from datetime import datetime, date
 from typing import Optional
@@ -40,6 +59,7 @@ from typing import Optional
 import asyncpg
 
 from app.db import _pool, db_enabled  # reuse the same connection pool
+
 
 # ---------------------------------------------------------------------------
 # ID generation
@@ -90,10 +110,37 @@ def generate_incident_id(device_id: str, trigger_ts: int) -> str:
     return f"{device_id}_INC{trigger_ts}"
 
 
-def generate_email_otp() -> str:
-    """6-digit numeric verification code, delivered by email via the
-    Apps Script + Gmail queue rather than SMS."""
-    return "".join(random.choices(string.digits, k=6))
+# ---------------------------------------------------------------------------
+# Password hashing — temporary stopgap until Firebase owns login.
+#
+# PBKDF2-HMAC-SHA256 with a random per-user salt, stdlib only (no bcrypt/
+# argon2 dependency to add for what's explicitly a throwaway system).
+# Stored format: "<salt_hex>$<iterations>$<hash_hex>" so the iteration
+# count can change later without breaking verification of older hashes.
+# ---------------------------------------------------------------------------
+
+_PBKDF2_ITERATIONS = 200_000
+
+
+def hash_password(password: str) -> str:
+    salt = secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), bytes.fromhex(salt), _PBKDF2_ITERATIONS
+    ).hex()
+    return f"{salt}${_PBKDF2_ITERATIONS}${digest}"
+
+
+def verify_password(password: str, stored_hash: str) -> bool:
+    try:
+        salt, iterations, digest = stored_hash.split("$")
+        iterations = int(iterations)
+    except (ValueError, AttributeError):
+        return False   # malformed hash — never crash on a bad stored value
+
+    candidate = hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), bytes.fromhex(salt), iterations
+    ).hex()
+    return hmac.compare_digest(candidate, digest)   # constant-time compare
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +167,8 @@ async def init_user_tables():
                 dob             DATE NOT NULL,
                 phone           TEXT NOT NULL UNIQUE,
                 email           TEXT NOT NULL UNIQUE,
-                verified        BOOLEAN NOT NULL DEFAULT FALSE,  -- verified via emailed code
+                password_hash   TEXT NOT NULL,   -- temporary, until Firebase owns auth
+                verified        BOOLEAN NOT NULL DEFAULT FALSE,  -- proven via Apps Script OTP
                 created_at      BIGINT NOT NULL
             )
         """)
@@ -179,23 +227,6 @@ async def init_user_tables():
             )
         """)
 
-        # ── Email verification codes (registration / login) ────────────────
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS email_otp_codes (
-                email           TEXT NOT NULL,
-                code            TEXT NOT NULL,
-                purpose         TEXT NOT NULL DEFAULT 'registration',
-                created_at      BIGINT NOT NULL,
-                expires_at      BIGINT NOT NULL,
-                verified        BOOLEAN NOT NULL DEFAULT FALSE,
-                attempts        INTEGER NOT NULL DEFAULT 0
-            )
-        """)
-        await conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_email_otp_email
-            ON email_otp_codes (email, created_at DESC)
-        """)
-
         # ── Outbound email job queue — polled by an external Google Apps
         #    Script (owned by the project author) which sends the actual
         #    email via GmailApp and reports back via mark-sent/mark-failed.
@@ -219,7 +250,7 @@ async def init_user_tables():
         """)
 
     print("  User tables : ENABLED  (users, contacts, devices, preferences, "
-          "incidents, email_otp_codes, email_queue)")
+          "incidents, email_queue)")
 
 
 # ---------------------------------------------------------------------------
@@ -321,125 +352,19 @@ async def mark_email_failed(email_id: int, error: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Email-based OTP — verification codes delivered via the email queue above
-#
-# Replaces the earlier MSG91 phone-OTP flow. Same expiry/attempt-limiting
-# design as before, just addressed by email instead of phone, and the
-# delivery mechanism is enqueue_email() instead of an SMS provider call.
-# ---------------------------------------------------------------------------
-
-OTP_EXPIRY_SECONDS = 300   # 5 minutes
-OTP_MAX_ATTEMPTS   = 5
-
-
-async def send_email_otp(email: str, purpose: str = "registration",
-                          to_name: Optional[str] = None) -> None:
-    """
-    Generates a 6-digit code, stores it in email_otp_codes, and enqueues
-    an 'email_otp' job for the Apps Script sender to deliver.
-    """
-    from app import db as dbmod
-    if not db_enabled():
-        raise RuntimeError("Postgres not configured — cannot issue an email OTP.")
-
-    code = generate_email_otp()
-    now = int(datetime.utcnow().timestamp())
-    expires = now + OTP_EXPIRY_SECONDS
-
-    pool = dbmod._pool
-    async with pool.acquire() as conn:
-        await conn.execute(
-            """
-            INSERT INTO email_otp_codes (email, code, purpose, created_at, expires_at)
-            VALUES ($1, $2, $3, $4, $5)
-            """,
-            email, code, purpose, now, expires,
-        )
-
-    await enqueue_email(
-        to_email=email,
-        to_name=to_name,
-        template_type="email_otp",
-        payload={
-            "code": code,
-            "purpose": purpose,
-            "expires_in_seconds": OTP_EXPIRY_SECONDS,
-        },
-    )
-
-
-async def verify_email_otp(email: str, code: str, purpose: str = "registration") -> bool:
-    """
-    Checks the most recent unverified, unexpired code for this email+purpose.
-    Increments attempts on every check; locks out after OTP_MAX_ATTEMPTS.
-    Identical logic to the original phone-OTP implementation, just keyed
-    by email instead of phone.
-    """
-    from app import db as dbmod
-    if not db_enabled():
-        raise RuntimeError("Postgres not configured.")
-
-    pool = dbmod._pool
-    now = int(datetime.utcnow().timestamp())
-
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            """
-            SELECT code, expires_at, verified, attempts
-            FROM email_otp_codes
-            WHERE email = $1 AND purpose = $2
-            ORDER BY created_at DESC
-            LIMIT 1
-            """,
-            email, purpose,
-        )
-
-        if row is None:
-            return False
-        if row["verified"]:
-            return False   # already used
-        if row["attempts"] >= OTP_MAX_ATTEMPTS:
-            return False   # locked out
-        if now > row["expires_at"]:
-            return False   # expired
-
-        await conn.execute(
-            """
-            UPDATE email_otp_codes SET attempts = attempts + 1
-            WHERE email = $1 AND purpose = $2 AND created_at = (
-                SELECT created_at FROM email_otp_codes
-                WHERE email = $1 AND purpose = $2
-                ORDER BY created_at DESC LIMIT 1
-            )
-            """,
-            email, purpose,
-        )
-
-        if row["code"] != code:
-            return False
-
-        await conn.execute(
-            """
-            UPDATE email_otp_codes SET verified = TRUE
-            WHERE email = $1 AND purpose = $2 AND created_at = (
-                SELECT created_at FROM email_otp_codes
-                WHERE email = $1 AND purpose = $2
-                ORDER BY created_at DESC LIMIT 1
-            )
-            """,
-            email, purpose,
-        )
-        return True
-
-
-# ---------------------------------------------------------------------------
 # Users
+#
+# create_user() is called from POST /user/register — but only AFTER the
+# external Apps Script has already confirmed the email via its own OTP
+# round-trip. That means by the time this runs, email ownership is already
+# proven, so verified=True is set immediately rather than in two steps.
 # ---------------------------------------------------------------------------
 
-async def create_user(name: str, dob: date, phone: str, email: str) -> dict:
+async def create_user(name: str, dob: date, phone: str, email: str, password: str) -> dict:
     """
-    Creates a user row. Does NOT mark verified — call mark_verified()
-    after a successful verify_otp() in the registration flow.
+    Creates a user row with verified=True immediately — the Apps Script
+    already proved email ownership via OTP before this function is ever
+    called, so there's no separate "pending" state to track here.
     Raises asyncpg.UniqueViolationError if phone, email, or the derived
     user_id already exist.
     """
@@ -448,14 +373,15 @@ async def create_user(name: str, dob: date, phone: str, email: str) -> dict:
 
     user_id = generate_user_id(name, dob)
     now = int(datetime.utcnow().timestamp())
+    pw_hash = hash_password(password)
 
     async with pool.acquire() as conn:
         await conn.execute(
             """
-            INSERT INTO users (user_id, name, dob, phone, email, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            INSERT INTO users (user_id, name, dob, phone, email, password_hash, verified, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, TRUE, $7)
             """,
-            user_id, name, dob, phone, email, now,
+            user_id, name, dob, phone, email, pw_hash, now,
         )
         # Seed default preferences row at the same time
         await conn.execute(
@@ -500,6 +426,24 @@ async def get_user_by_email(email: str) -> Optional[dict]:
     async with pool.acquire() as conn:
         row = await conn.fetchrow("SELECT * FROM users WHERE email = $1", email)
         return dict(row) if row else None
+
+
+async def verify_login(email: str, password: str) -> Optional[dict]:
+    """
+    Password-based login check — temporary stopgap until Firebase.
+    Returns the user dict on success, None on any failure (wrong email,
+    wrong password, or unverified account). Deliberately vague about
+    *which* of these failed in the return value — the route layer decides
+    how much detail to expose to the client.
+    """
+    user = await get_user_by_email(email)
+    if not user:
+        return None
+    if not user["verified"]:
+        return None
+    if not verify_password(password, user["password_hash"]):
+        return None
+    return user
 
 
 # ---------------------------------------------------------------------------

@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.auth import verify_api_key
 from app.schemas import (
-    UserRegister, EmailOtpRequest, EmailOtpVerify,
+    UserRegister, UserLogin,
     EmergencyContactIn, EmergencyContactUpdate,
     DeviceRegisterForUser, PreferencesUpdate,
 )
@@ -26,109 +26,67 @@ router = APIRouter(prefix="/user", tags=["user"])
 
 
 # ---------------------------------------------------------------------------
-# Registration + Login — email-based verification
+# Registration + Login
 #
-# How this works with the frontend:
-#   1. Register: user fills form → POST /user/register creates the DB row
-#      AND immediately calls send_email_otp() — no separate trigger needed
-#      from the frontend, unlike the old MSG91 flow.
-#   2. Login: user enters just their email → POST /user/login checks the
-#      account exists and is verified, then sends a fresh code the same way.
-#   3. Either path ends the same way: user reads the code from their inbox,
-#      submits it to POST /user/verify-otp with {email, code, purpose}.
-#   4. Delivery itself happens out-of-band: send_email_otp() only enqueues
-#      a row in email_queue. A Google Apps Script (external to this
-#      codebase) polls GET /email-queue/pending and actually sends the
-#      email via GmailApp, then reports back via mark-sent/mark-failed.
-#      See EMAIL_QUEUE_INTEGRATION.md for that contract.
+# Registration OTP is handled ENTIRELY by an external Google Apps Script
+# web app (OTP_Registration_Backend.gs) — its own Sheet, its own regId,
+# its own OTP round-trip. This backend is not involved in that exchange at
+# all. The frontend flow is:
+#
+#   1. Frontend calls the Apps Script's action=register directly (not this
+#      backend) — Apps Script emails an OTP and returns a regId.
+#   2. Frontend calls the Apps Script's action=verify with the code the user
+#      typed — THIS is the authoritative proof of email ownership.
+#   3. Only once that succeeds does the frontend call THIS backend's
+#      POST /user/register — which creates the actual ResQNet domain
+#      record (user_id, hashed password) with verified=True immediately,
+#      since email ownership was already proven in step 2.
+#
+# Login is separate and uses a password — deliberately NOT OTP. This is a
+# temporary stopgap; Firebase will eventually own login entirely, at which
+# point POST /user/login and verify_login() can be retired.
 # ---------------------------------------------------------------------------
 
 @router.post("/register", dependencies=[Depends(verify_api_key)])
 async def register_user(data: UserRegister):
     """
-    Creates the user row (verified=False) and immediately enqueues a
-    registration verification email.
+    Creates the ResQNet user record. Call this ONLY after the frontend has
+    already completed the Apps Script's OTP verify step — this endpoint
+    performs no OTP check of its own; it trusts that the caller already did.
     """
     try:
-        user = await user_db.create_user(data.name, data.dob, data.phone, data.email)
+        user = await user_db.create_user(
+            data.name, data.dob, data.phone, data.email, data.password
+        )
     except asyncpg.UniqueViolationError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A user with this phone number, email, or name+DOB combination already exists."
         )
 
-    try:
-        await user_db.send_email_otp(data.email, purpose="registration", to_name=data.name)
-    except RuntimeError as e:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e))
-
     return {
-        "status": "otp_sent",
+        "status": "registered",
         "user_id": user["user_id"],
-        "message": "Account created. Check your email for a verification code.",
+        "message": "Account created.",
     }
 
 
 @router.post("/login", dependencies=[Depends(verify_api_key)])
-async def login_user(data: EmailOtpRequest):
+async def login_user(data: UserLogin):
     """
-    Passwordless login, step 1: confirms the account exists and is
-    verified, then sends a fresh code to that email.
+    Password-based login — no OTP. Temporary until Firebase takes over.
     """
-    user = await user_db.get_user_by_email(data.email)
+    user = await user_db.verify_login(data.email, data.password)
     if not user:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
-                             detail="No account found for that email. Register first.")
-    if not user["verified"]:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
-                             detail="This account has not completed registration verification yet.")
-
-    try:
-        await user_db.send_email_otp(data.email, purpose="login", to_name=user["name"])
-    except RuntimeError as e:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e))
-
-    return {"status": "otp_sent", "message": "Check your email for a login code."}
-
-
-@router.post("/resend-otp", dependencies=[Depends(verify_api_key)])
-async def resend_otp(data: EmailOtpRequest):
-    """Re-sends a fresh code for either purpose ('registration' or 'login')."""
-    user = await user_db.get_user_by_email(data.email)
-    try:
-        await user_db.send_email_otp(
-            data.email, purpose=data.purpose,
-            to_name=user["name"] if user else None,
-        )
-    except RuntimeError as e:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e))
-    return {"status": "otp_sent"}
-
-
-@router.post("/verify-otp", dependencies=[Depends(verify_api_key)])
-async def verify_otp_route(data: EmailOtpVerify):
-    """
-    Verifies the code the user read from their email. On purpose=
-    'registration' this also activates the account (verified=True).
-    """
-    ok = await user_db.verify_email_otp(data.email, data.code, purpose=data.purpose)
-    if not ok:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid or expired code."
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password, or account not verified."
         )
-
-    user = await user_db.get_user_by_email(data.email)
-    if not user:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
-
-    if data.purpose == "registration":
-        await user_db.mark_verified(user["user_id"])
 
     return {
-        "status": "verified",
+        "status": "ok",
         "user_id": user["user_id"],
-        "message": "Verified.",
+        "message": "Signed in.",
     }
 
 
@@ -148,6 +106,10 @@ async def get_user_profile(user_id: str):
 
     # asyncpg Record -> dict already done in user_db; dates need str conversion
     user["dob"] = user["dob"].isoformat() if hasattr(user["dob"], "isoformat") else user["dob"]
+
+    # NEVER return the password hash to any client, even hashed. Strip it
+    # unconditionally before this dict leaves the backend.
+    user.pop("password_hash", None)
 
     return {
         "user": user,

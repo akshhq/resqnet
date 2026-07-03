@@ -25,8 +25,8 @@ function _headers() {
 // ── Session state ────────────────────────────────────────────────────────────
 let currentUserId = localStorage.getItem("resqnet_user_id") || null;
 let currentView = "home";
-let pendingEmail = null;   // email currently awaiting OTP verification
-let otpPurpose = null;     // "login" | "registration"
+// pendingRegistration (declared near the REGISTER handler below) tracks
+// the form data between "OTP sent" and "OTP verified".
 
 // ── API helper ───────────────────────────────────────────────────────────────
 async function api(method, path, body) {
@@ -83,6 +83,7 @@ function logout() {
   document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
   document.getElementById("view-auth").classList.add("active");
   document.getElementById("login-email").value = "";
+  document.getElementById("login-password").value = "";
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -99,27 +100,39 @@ document.querySelectorAll(".auth-tab").forEach(tab => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// REGISTER
+// REGISTER — OTP verification happens against the external Apps Script web
+// app (otp-frontend.js: registerUser / verifyOtp / resendOtp), NOT this
+// backend. Only once the Apps Script confirms the email via OTP does this
+// frontend call OUR backend's POST /user/register to actually create the
+// ResQNet account.
 // ─────────────────────────────────────────────────────────────────────────────
 
-document.getElementById("register-btn").addEventListener("click", async () => {
-  const name  = document.getElementById("reg-name").value.trim();
-  const dob   = document.getElementById("reg-dob").value;
-  const phone = normalisePhone(document.getElementById("reg-phone").value.trim());
-  const email = document.getElementById("reg-email").value.trim();
+// Holds the registration form data between "OTP sent" and "OTP verified",
+// since the Apps Script's verify response doesn't carry it back to us.
+let pendingRegistration = null;
 
-  if (!name || !dob || !phone || !email) {
+document.getElementById("register-btn").addEventListener("click", async () => {
+  const name     = document.getElementById("reg-name").value.trim();
+  const dob      = document.getElementById("reg-dob").value;
+  const phone    = normalisePhone(document.getElementById("reg-phone").value.trim());
+  const email    = document.getElementById("reg-email").value.trim();
+  const password = document.getElementById("reg-password").value;
+
+  if (!name || !dob || !phone || !email || !password) {
     showToast("Please fill in all fields.", "error");
+    return;
+  }
+  if (password.length < 8) {
+    showToast("Password must be at least 8 characters.", "error");
     return;
   }
 
   try {
-    // Backend creates the account AND enqueues the verification email in
-    // one call — no separate "send OTP" step needed from here.
-    await api("POST", "/user/register", { name, dob, phone, email });
-    pendingEmail = email;
-    otpPurpose = "registration";
-    showToast("Account created! Check your email for a code.", "success");
+    // Talks to the Apps Script web app directly — sends the OTP email.
+    // Our own backend is not involved in this call at all.
+    await registerUser({ name, dob, phone, email, password });
+    pendingRegistration = { name, dob, phone, email, password };
+    showToast("Code sent! Check your email.", "success");
     startOtpView(email, "Verify your new account");
   } catch (err) {
     showToast(err.message, "error");
@@ -127,19 +140,22 @@ document.getElementById("register-btn").addEventListener("click", async () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// LOGIN  (email-only — OTP IS the login mechanism, no password)
+// LOGIN — password-based, no OTP. Temporary stopgap until Firebase.
 // ─────────────────────────────────────────────────────────────────────────────
 
 document.getElementById("login-btn").addEventListener("click", async () => {
-  const email = document.getElementById("login-email").value.trim();
-  if (!email) { showToast("Enter your email address.", "error"); return; }
+  const email    = document.getElementById("login-email").value.trim();
+  const password = document.getElementById("login-password").value;
+
+  if (!email || !password) {
+    showToast("Enter your email and password.", "error");
+    return;
+  }
 
   try {
-    await api("POST", "/user/login", { email, purpose: "login" });
-    pendingEmail = email;
-    otpPurpose = "login";
-    showToast("Code sent to your email.", "success");
-    startOtpView(email, "Sign in to your account");
+    const res = await api("POST", "/user/login", { email, password });
+    showToast("Signed in.", "success");
+    setLoggedIn(res.user_id);
   } catch (err) {
     showToast(err.message, "error");
   }
@@ -151,9 +167,9 @@ function normalisePhone(raw) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// EMAIL OTP — code is delivered out-of-band by the Apps Script email sender.
-// This frontend only ever POSTs the code the user typed to /user/verify-otp;
-// it has no knowledge of how the email was actually sent.
+// REGISTRATION OTP — verified against the Apps Script web app (otp-frontend.js).
+// On success, we call OUR backend to actually create the ResQNet account
+// using the form data captured in pendingRegistration above.
 // ─────────────────────────────────────────────────────────────────────────────
 
 function startOtpView(email, hintText) {
@@ -164,13 +180,23 @@ function startOtpView(email, hintText) {
 
 document.getElementById("otp-submit-btn").addEventListener("click", async () => {
   const code = document.getElementById("otp-code-input").value.trim();
-  if (code.length < 4) { showToast("Enter the code from your email.", "error"); return; }
+  if (code.length !== 6) { showToast("Enter the 6-digit code from your email.", "error"); return; }
+  if (!pendingRegistration) { showToast("Registration session expired. Please start over.", "error"); return; }
 
   try {
-    const res = await api("POST", "/user/verify-otp", {
-      email: pendingEmail, code, purpose: otpPurpose
-    });
-    showToast("Verified!", "success");
+    // Authoritative check — this call is against the Apps Script, and its
+    // server-side verify is what actually proves email ownership.
+    const otpResult = await verifyOtp(code);
+    if (!otpResult.success) {
+      showToast(otpResult.error || "Invalid or expired code.", "error");
+      return;
+    }
+
+    // Apps Script confirmed the email. Now create the actual ResQNet
+    // account in our own backend using the data collected at registration.
+    const res = await api("POST", "/user/register", pendingRegistration);
+    showToast("Account verified and created!", "success");
+    pendingRegistration = null;
     setLoggedIn(res.user_id);
   } catch (err) {
     showToast(err.message, "error");
@@ -178,9 +204,9 @@ document.getElementById("otp-submit-btn").addEventListener("click", async () => 
 });
 
 document.getElementById("otp-resend-btn").addEventListener("click", async () => {
-  if (!pendingEmail) return;
+  if (!pendingRegistration) return;
   try {
-    await api("POST", "/user/resend-otp", { email: pendingEmail, purpose: otpPurpose });
+    await resendOtp(pendingRegistration.email);
     showToast("A new code has been sent.", "success");
   } catch (err) {
     showToast(err.message, "error");
