@@ -95,3 +95,8 @@ class PreferencesUpdate(BaseModel):
     quiet_hours_start:      Optional[str] = Field(None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     quiet_hours_end:        Optional[str] = Field(None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     language:               Optional[str] = Field(None, min_length=2, max_length=8)
+
+
+class ResponderIn(BaseModel):
+    email: EmailStr
+    name: Optional[str] = Field(None, max_length=100)

@@ -257,6 +257,20 @@
           </div>
         </div>
 
+        <div class="card">
+          <div class="card-title">Authorized Responders</div>
+          <p class="pref-desc" style="font-size: 13px; color: var(--slate-400); margin-bottom: 12px;">
+            Emails of emergency services/responders notified when your device triggers an alert.
+          </p>
+          <div id="responders-list" class="responders-list">
+            <!-- Dynamically populated -->
+          </div>
+          <div class="field-inline" style="margin-top: 14px; display: flex; gap: 8px;">
+            <input type="email" id="new-responder-email" placeholder="responder@example.com" style="flex: 1; padding: 6px 10px; border-radius: 4px; border: 1px solid var(--slate-700); background: var(--slate-800); color: #fff;">
+            <button class="btn-primary btn-sm" id="add-responder-btn" style="padding: 6px 12px;">Add</button>
+          </div>
+        </div>
+
         <button class="btn-primary" id="save-prefs-btn">Save Settings</button>
       </div>
     </div>

@@ -113,7 +113,10 @@ function showView(name) {
 
   if (name === "home")        loadHome();
   if (name === "contacts")    loadContacts();
-  if (name === "preferences") loadPreferences();
+  if (name === "preferences") {
+    loadPreferences();
+    loadResponders();
+  }
   if (name === "incidents")   loadIncidents();
 }
 
@@ -585,6 +588,57 @@ document.getElementById("save-prefs-btn").addEventListener("click", async () => 
       quiet_hours_end:       document.getElementById("pref-quiet-end").value,
     });
     showToast("Settings saved.", "success");
+  } catch (err) {
+    showToast(err.message, "error");
+  }
+});
+
+async function loadResponders() {
+  if (!currentUserId) return;
+  try {
+    const responders = await api("GET", `/user/${currentUserId}/responders`);
+    renderResponders(responders);
+  } catch (err) {
+    showToast(err.message, "error");
+  }
+}
+
+function renderResponders(responders) {
+  const el = document.getElementById("responders-list");
+  if (!responders.length) {
+    el.innerHTML = `<div class="empty-state" style="padding:10px 0 0 0; text-align: left;">No custom responder emails added yet.</div>`;
+    return;
+  }
+  el.innerHTML = responders.map(r => `
+    <div class="responder-row">
+      <span class="responder-email">${escapeHtml(r.email)}</span>
+      <div class="responder-actions">
+        <button class="btn-danger" style="padding: 2px 8px; font-size: 11px;" onclick="removeResponder('${r.email}')">Remove</button>
+      </div>
+    </div>
+  `).join("");
+}
+
+window.removeResponder = async function(email) {
+  if (!confirm(`Remove responder ${email}?`)) return;
+  try {
+    await api("DELETE", `/user/${currentUserId}/responders/${email}`);
+    showToast("Responder removed.", "success");
+    loadResponders();
+  } catch (err) {
+    showToast(err.message, "error");
+  }
+};
+
+document.getElementById("add-responder-btn").addEventListener("click", async () => {
+  const emailInput = document.getElementById("new-responder-email");
+  const email = emailInput.value.trim();
+  if (!email) { showToast("Enter a valid email address.", "error"); return; }
+  try {
+    await api("POST", `/user/${currentUserId}/responders`, { email });
+    showToast("Responder added.", "success");
+    emailInput.value = "";
+    loadResponders();
   } catch (err) {
     showToast(err.message, "error");
   }

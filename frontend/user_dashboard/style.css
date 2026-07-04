@@ -419,6 +419,16 @@ body {
   font-size: 14px; color: var(--text-dim); line-height: 1.6;
 }
 
+/* ── Responders list ── */
+.responders-list { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.responder-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 12px; background: var(--surface2); border-radius: var(--radius-sm);
+  border: 1px solid var(--border); font-size: 13px;
+}
+.responder-email { font-family: monospace; color: var(--text-muted); }
+.responder-actions { display: flex; align-items: center; }
+
 /* ── Scrollbars ── */
 ::-webkit-scrollbar { width: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }

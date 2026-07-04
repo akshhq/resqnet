@@ -102,7 +102,7 @@ Use this configuration to deploy ResQNet in a live cloud production environment.
 4. Deploy the static directories (`Trial_Dashboard/`, `frontend/user_dashboard/`, and `frontend/responder_dashboard/`) to your static hosting provider (e.g., **Vercel**, **Netlify**, or **GitHub Pages**).
 
 ### 3. Deploy Google Apps Scripts
-1. Paste the code from `apps_script/Emergency_Session_Backend.gs` into a Google Apps Script project.
+1. Paste the code from `backend/Session Token.gs` into a Google Apps Script project.
 2. Deploy the project as a Web App:
    * **Execute as**: `Me`
    * **Who has access**: `Anyone`

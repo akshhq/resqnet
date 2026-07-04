@@ -78,6 +78,13 @@ async def _trigger_responder_alert(device_id: str, user_id: str, name: str,
     except Exception as e:
         print(f"[WARNING] Could not load emergency contacts for {user_id}: {e}")
 
+    responder_emails: list[str] = []
+    try:
+        responders = await user_db.list_responders(user_id)
+        responder_emails = [r["email"] for r in responders if r.get("email")]
+    except Exception as e:
+        print(f"[WARNING] Could not load responders for {user_id}: {e}")
+
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             res = await client.post(
@@ -90,6 +97,7 @@ async def _trigger_responder_alert(device_id: str, user_id: str, name: str,
                     "lat": lat,
                     "lng": lng,
                     "contactEmails": contact_emails,
+                    "responderEmails": responder_emails,
                 }),
                 headers={"Content-Type": "text/plain;charset=utf-8"},
             )

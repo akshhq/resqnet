@@ -193,6 +193,17 @@ async def init_user_tables():
             ON email_queue (status, created_at ASC)
         """)
 
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS responders (
+                id              BIGSERIAL PRIMARY KEY,
+                user_id         TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+                email           TEXT NOT NULL,
+                name            TEXT,
+                created_at      BIGINT NOT NULL,
+                UNIQUE (user_id, email)
+            )
+        """)
+
         # Indexes for frequent lookup queries
         await conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_devices_user_id
@@ -309,6 +320,14 @@ async def create_user(user_id: str, name: str, dob: date, phone: str, email: str
             ON CONFLICT (user_id) DO NOTHING
             """,
             user_id,
+        )
+        await conn.execute(
+            """
+            INSERT INTO responders (user_id, email, name, created_at)
+            VALUES ($1, 'kumaraksh1107@gmail.com', 'Primary Responder', $2)
+            ON CONFLICT (user_id, email) DO NOTHING
+            """,
+            user_id, now,
         )
 
     return {"user_id": user_id, "name": name, "dob": dob.isoformat(), "phone": phone, "email": email}
@@ -618,3 +637,42 @@ async def list_user_incidents(user_id: str) -> list[dict]:
             "SELECT * FROM incidents WHERE user_id = $1 ORDER BY started_at DESC", user_id
         )
         return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Responders
+# ---------------------------------------------------------------------------
+
+async def list_responders(user_id: str) -> list[dict]:
+    from app import db as dbmod
+    pool = dbmod._pool
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM responders WHERE user_id = $1 ORDER BY created_at ASC",
+            user_id,
+        )
+        return [dict(r) for r in rows]
+
+async def add_responder(user_id: str, email: str, name: Optional[str] = None) -> dict:
+    from app import db as dbmod
+    pool = dbmod._pool
+    now = int(datetime.now(timezone.utc).timestamp())
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO responders (user_id, email, name, created_at)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (user_id, email) DO UPDATE SET name = EXCLUDED.name
+            """,
+            user_id, email, name or "Authorized Responder", now,
+        )
+    return {"user_id": user_id, "email": email, "name": name or "Authorized Responder", "created_at": now}
+
+async def delete_responder(user_id: str, email: str) -> None:
+    from app import db as dbmod
+    pool = dbmod._pool
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM responders WHERE user_id = $1 AND email = $2",
+            user_id, email,
+        )

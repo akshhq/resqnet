@@ -19,6 +19,7 @@ from app.schemas import (
     UserRegister,
     EmergencyContactIn, EmergencyContactUpdate,
     DeviceRegisterForUser, PreferencesUpdate,
+    ResponderIn,
 )
 from app import user_db
 
@@ -205,3 +206,23 @@ async def update_preferences(user_id: str, data: PreferencesUpdate):
 @router.get("/{user_id}/incidents", dependencies=[Depends(verify_api_key)])
 async def get_incidents(user_id: str):
     return await user_db.list_user_incidents(user_id)
+
+
+# ---------------------------------------------------------------------------
+# Responders
+# ---------------------------------------------------------------------------
+
+@router.get("/{user_id}/responders", dependencies=[Depends(verify_api_key)])
+async def get_responders(user_id: str):
+    return await user_db.list_responders(user_id)
+
+
+@router.post("/{user_id}/responders", dependencies=[Depends(verify_api_key)])
+async def create_responder(user_id: str, data: ResponderIn):
+    return await user_db.add_responder(user_id, data.email, data.name)
+
+
+@router.delete("/{user_id}/responders/{email}", dependencies=[Depends(verify_api_key)])
+async def delete_responder(user_id: str, email: str):
+    await user_db.delete_responder(user_id, email)
+    return {"status": "deleted"}
