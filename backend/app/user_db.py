@@ -113,10 +113,11 @@ async def init_user_tables():
             )
         """)
 
-        # Devices — no owner column here. Ownership lives in user_devices.
+        # Devices
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS devices (
                 device_id       TEXT PRIMARY KEY,
+                user_id         TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
                 friendly_name   TEXT NOT NULL,
                 battery         INTEGER,
                 last_seen       BIGINT,
@@ -437,10 +438,10 @@ async def register_user_device(user_id: str, friendly_name: str) -> dict:
         async with conn.transaction():
             await conn.execute(
                 """
-                INSERT INTO devices (device_id, friendly_name, status, created_at)
-                VALUES ($1, $2, 'offline', $3)
+                INSERT INTO devices (device_id, user_id, friendly_name, status, created_at)
+                VALUES ($1, $2, $3, 'offline', $4)
                 """,
-                device_id, friendly_name, now,
+                device_id, user_id, friendly_name, now,
             )
             await conn.execute(
                 """
