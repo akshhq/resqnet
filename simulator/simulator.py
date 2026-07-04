@@ -213,7 +213,7 @@ def send_loop():
             }
 
         try:
-            r = requests.post(BACKEND_URL, json=payload, headers=HEADERS, timeout=2)
+            r = requests.post(BACKEND_URL, json=payload, headers=HEADERS, timeout=5.0)
             _log(f"speed={actual_speed:.2f} m/s  heading={heading:.0f}°  "
                  f"mode={mode}  bat={round(battery)}%  "
                  f"em={emergency}  → {r.status_code}")
