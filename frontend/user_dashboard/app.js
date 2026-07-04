@@ -204,7 +204,7 @@ document.getElementById("login-btn").addEventListener("click", async () => {
   try {
     const userCredential = await signInWithEmailAndPassword(auth, email, password);
     showToast("Signed in.", "success");
-    // Registration with backend handles user creation, setLoggedIn will be called via onAuthStateChanged or directly
+    setLoggedIn(userCredential.user.uid);
   } catch (err) {
     showToast(err.message, "error");
   }
@@ -241,6 +241,7 @@ document.getElementById("google-login-btn").addEventListener("click", async () =
         email: result.user.email || `${result.user.uid}@google.resqnet.demo`
       });
     } catch(e) { /* Might already exist */ }
+    setLoggedIn(result.user.uid);
   } catch (err) {
     showToast(err.message, "error");
   }
@@ -306,6 +307,7 @@ document.getElementById("verify-otp-btn").addEventListener("click", async () => 
         email: emailVal
       });
     } catch(e) { /* Might already exist */ }
+    setLoggedIn(result.user.uid);
   } catch (err) {
     showToast(err.message, "error");
   }

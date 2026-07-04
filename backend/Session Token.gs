@@ -32,7 +32,7 @@
 // Deployed at (production): see backend/.env -> SESSION_TOKEN_WEBAPP_URL
 //
 // ================== CONFIG ==================
-const SHEET_ID          = "1B7FDx0mVVKscbIh9iYZ569LqrnLy4dO_bHcLYGulLIg";
+const SHEET_ID          = "1J3t8UhsigJrw9BKgV6ya6U8hTUVhiSf3anFtoUcg4MA";
 const SESSIONS_TAB       = "EmergencySessions";
 const DASHBOARD_BASE_URL = "https://aksh.is-a.dev/resqnet/frontend/responder_dashboard/index.html";
 const RESPONDER_EMAILS   = ["responder1@example.com", "responder2@example.com"]; // or a Google Group address
