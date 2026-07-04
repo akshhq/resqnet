@@ -697,3 +697,8 @@ body.resolved #emergency-banner {
   .action-label { display: none; }
   .action-btn { flex: 1; padding: 0 12px; }
 }
+
+/* ── Hidden Attribute Helper ── */
+[hidden] {
+  display: none !important;
+}
