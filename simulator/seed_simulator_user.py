@@ -66,31 +66,35 @@ def main():
     parser.add_argument("--url", default="https://resqnet-gti8.onrender.com",
                          help="Backend base URL (default: production Render URL)")
     parser.add_argument("--key", default=os.getenv("API_KEY", ""),
-                         help="API key for backend auth. Reads API_KEY env var if not set.")
+    parser.add_argument("--uid", default="",
+                         help="Target Firebase user_id. If provided, registers a device for this user instead of the default simulator user.")
     args = parser.parse_args()
 
     base = args.url.rstrip("/")
     headers = {"X-API-Key": args.key} if args.key else {}
 
-    # ── 1. Register (or find) the Simulator user ────────────────────────
-    print(f"→ Registering simulator user at {base}/user/register ...")
-    res = requests.post(f"{base}/user/register", json={
-        "name": SIM_NAME,
-        "dob": SIM_DOB,
-        "phone": SIM_PHONE,
-        "email": SIM_EMAIL,
-        "password": SIM_PASSWORD,
-    }, headers=headers, timeout=10)
+    user_id = args.uid
 
-    if res.status_code == 200:
-        user_id = res.json()["user_id"]
-        print(f"✅ Created simulator user: {user_id}")
-    elif res.status_code == 409:
-        user_id = EXPECTED_USER_ID
-        print(f"ℹ️  Simulator user already exists — reusing: {user_id}")
-    else:
-        print(f"❌ Registration failed ({res.status_code}): {res.text}")
-        sys.exit(1)
+    if not user_id:
+        # ── 1. Register (or find) the Simulator user ────────────────────────
+        print(f"→ Registering simulator user at {base}/user/register ...")
+        res = requests.post(f"{base}/user/register", json={
+            "user_id": EXPECTED_USER_ID,
+            "name": SIM_NAME,
+            "dob": SIM_DOB,
+            "phone": SIM_PHONE,
+            "email": SIM_EMAIL,
+        }, headers=headers, timeout=10)
+
+        if res.status_code == 200:
+            user_id = res.json()["user_id"]
+            print(f"✅ Created simulator user: {user_id}")
+        elif res.status_code == 409:
+            user_id = EXPECTED_USER_ID
+            print(f"ℹ️  Simulator user already exists — reusing: {user_id}")
+        else:
+            print(f"❌ Registration failed ({res.status_code}): {res.text}")
+            sys.exit(1)
 
     # ── 2. Register one device under that user ───────────────────────────
     print(f"→ Registering a device for {user_id} ...")
@@ -116,8 +120,11 @@ def main():
     print(f"  password   : {SIM_PASSWORD}")
     print(f"  device_id  : {device_id}")
     print()
-    print("  Log into the User Dashboard with the email/password above to")
-    print("  see this account's device list, contacts, and incidents live.")
+    if args.uid:
+        print(f"  Device {device_id} is successfully assigned to {user_id}.")
+    else:
+        print("  Log into the User Dashboard with the email/password above to")
+        print("  see this account's device list, contacts, and incidents live.")
     print()
     print("  Now drive live data into it with:")
     print(f"    python simulator/simulator.py --demo --id {device_id} "

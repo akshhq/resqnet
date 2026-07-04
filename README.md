@@ -37,7 +37,7 @@ It's built around one premise: **the device triggers the alert, not the app.** O
 
 ```
 [ Trial Dashboard ]         [ User Dashboard ]           [ Responder Dashboard ]
-  (in-browser sim,            (register/login, devices,     (opened via magic link
+  (in-browser sim,            (Firebase auth, devices,      (opened via magic link
    dev/demo tool)              contacts, incidents)          from an emergency email)
         │                            │                              ▲
         │  POST /device/update       │  POST/GET /user/*            │ ?uid=&token=
@@ -54,11 +54,6 @@ It's built around one premise: **the device triggers the alert, not the app.** O
   dashboard ]         user_devices /
                        emergency_contacts /
                        incidents / email_queue
-
-[ OTP Registration Apps Script ]  ◄── called directly by the User Dashboard
-  (its own Sheet, its own OTP        during signup, BEFORE the backend's
-   round-trip — backend not          /user/register is ever called
-   involved in this exchange)
 ```
 
 ### Core data flow (per device tick)
@@ -111,13 +106,11 @@ resqnet/
 │   ├── env.example                 # Copy to .env — documents every variable
 │   └── .env                        # (gitignored) local secrets
 ├── apps_script/
-│   ├── OTP_Registration_Backend.gs      # Registration OTP — own Sheet, own crypto
 │   └── Emergency_Session_Backend.gs     # Responder magic links + emergency-contact alerts
 ├── frontend/
-│   ├── user_dashboard/             # Register / login / devices / contacts / incidents
+│   ├── user_dashboard/             # Firebase auth / devices / contacts / incidents
 │   │   ├── index.html
-│   │   ├── app.js                  # Talks to the FastAPI /user/* endpoints
-│   │   ├── otp-frontend.js         # Talks directly to the OTP Apps Script
+│   │   ├── app.js                  # Firebase Auth + talks to FastAPI /user/*
 │   │   └── style.css
 │   └── responder_dashboard/        # Opened via emergency magic link
 │       ├── index.html
@@ -191,12 +184,12 @@ The original dev/demo tool — an in-browser device simulator plus live map, ent
 
 ### 3. User Dashboard
 Where a real person manages their account:
-- **Register** — Full Name, DOB, Phone, Email, Password. The OTP round-trip happens against the OTP Apps Script *before* the backend is ever called; the backend's `/user/register` just creates the domain record once that's proven.
-- **Login** — email + password (temporary, pre-Firebase).
+- **Register & Login** — Handled natively by Firebase Auth (email verification & passwords). The backend just creates a relational record upon signup.
 - **Devices** — add a device (generates a `device_id`, provisions its log table), see battery/status/last-seen live.
 - **Emergency contacts** — up to 3, email-first, priority-ordered.
 - **Incidents** — history of past emergencies for this account.
 - **Voice Monitoring** — placeholder card, disabled. Reserves the UI slot for a future device-mic feature; does nothing yet.
+- The dashboard now loads directly from the network. The service-worker cache layer was removed so deployed HTML/CSS/JS changes show up immediately instead of being held behind stale cached assets.
 
 ### 4. Responder Dashboard
 Never logged into directly — it's opened via the link an emergency email contains (`?uid=&token=`). On load, it validates that link against the Emergency Session Token Apps Script, then drives the exact same live map / WebSocket feed / timeline UI the Trial Dashboard uses for manual device IDs. When the device resets, the link is killed automatically on both the Apps Script side and in Postgres.
@@ -248,8 +241,7 @@ Plus, per device, `db.py` maintains its own circular-buffer log table (`device_<
 ### User Dashboard (`/user/*`, all require `X-API-Key` if auth is enabled)
 | Endpoint | Purpose |
 |---|---|
-| `POST /user/register` | Create account — call only after the OTP Apps Script's `verify` succeeded |
-| `POST /user/login` | Email + password login |
+| `POST /user/register` | Create account — links Firebase UID to Postgres profile |
 | `GET /user/{user_id}` | Full profile: user + contacts + devices + preferences |
 | `POST/GET /user/{user_id}/contacts` | Add / list emergency contacts |
 | `PATCH/DELETE /user/contacts/{id}` | Edit / remove a contact |
@@ -268,9 +260,6 @@ See `EMAIL_QUEUE_INTEGRATION.md`.
 ## Google Apps Scripts
 
 Both live in `apps_script/` as version-controlled reference source — the actual deployment happens in the Apps Script editor, and the `/exec` URL goes into `backend/.env`.
-
-### `OTP_Registration_Backend.gs`
-Self-contained: own Google Sheet, own OTP generation/expiry (10 min TTL), own HMAC-based encryption for client-side UX. Called **directly by the User Dashboard**, never by the backend. `action=register` / `action=verify` / `action=resend`.
 
 ### `Emergency_Session_Backend.gs`
 Called **by the backend**, server-to-server, the instant an emergency starts. Generates a 6-character responder token, emails the fixed `RESPONDER_EMAILS` list *and* every address passed in `contactEmails` (the triggering user's emergency contacts), and exposes `action=validate` / `action=resolve` for the Responder Dashboard.
@@ -343,6 +332,7 @@ Interactive keys: `p` panic · `r` reset · `0`–`3` mode · `t` sharp turn · 
 | Optional API key auth + rate limiting | ✅ Working |
 | Trial Dashboard (in-browser sim + map) | ✅ Working, unchanged |
 | User Dashboard (register/login/devices/contacts/incidents) | ✅ Wired end-to-end |
+| User Dashboard cache/service worker layer | ✅ Removed — live deploys now show current files immediately |
 | Responder Dashboard (magic link → live map) | ✅ Wired end-to-end |
 | Postgres schema (4 core tables + supporting) | ✅ Implemented |
 | OTP registration Apps Script | ✅ Working, versioned in `apps_script/` |
@@ -365,6 +355,7 @@ Interactive keys: `p` panic · `r` reset · `0`–`3` mode · `t` sharp turn · 
 - RBAC design before building any Operations/Admin dashboard
 - Persistent storage for `device_state`/`device_history` (currently wiped on every backend restart)
 - Real device-mic streaming behind the Voice Monitoring placeholder, with explicit per-device consent
+- User Dashboard service-worker caching removed so the live site reflects the latest frontend structure without a manual cache clear
 
 ---
 

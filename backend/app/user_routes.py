@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.auth import verify_api_key
 from app.schemas import (
-    UserRegister, UserLogin,
+    UserRegister,
     EmergencyContactIn, EmergencyContactUpdate,
     DeviceRegisterForUser, PreferencesUpdate,
 )
@@ -56,7 +56,7 @@ async def register_user(data: UserRegister):
     """
     try:
         user = await user_db.create_user(
-            data.name, data.dob, data.phone, data.email, data.password
+            data.user_id, data.name, data.dob, data.phone, data.email
         )
     except asyncpg.UniqueViolationError:
         raise HTTPException(
@@ -71,23 +71,7 @@ async def register_user(data: UserRegister):
     }
 
 
-@router.post("/login", dependencies=[Depends(verify_api_key)])
-async def login_user(data: UserLogin):
-    """
-    Password-based login — no OTP. Temporary until Firebase takes over.
-    """
-    user = await user_db.verify_login(data.email, data.password)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password, or account not verified."
-        )
 
-    return {
-        "status": "ok",
-        "user_id": user["user_id"],
-        "message": "Signed in.",
-    }
 
 
 # ---------------------------------------------------------------------------

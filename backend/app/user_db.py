@@ -63,28 +63,7 @@ from app.db import _pool, db_enabled  # reuse the same connection pool
 # ID generation
 # ---------------------------------------------------------------------------
 
-def _clean_phone(phone: str) -> str:
-    """Strips everything except digits — used only for building user_id."""
-    return re.sub(r"\D", "", phone or "")
 
-
-def generate_user_id(name: str, phone: str) -> str:
-    """
-    user_id = <firstname>_<lastname>_<phonenumber>, all lowercase.
-    e.g. generate_user_id("Aksh Kumar", "+91 98765-43210")
-         -> "aksh_kumar_919876543210"
-
-    Only the first two whitespace-separated tokens of `name` are used
-    (firstname, lastname) — a middle name or suffix is dropped from the ID
-    but still stored in full in the `name` column.
-    """
-    letters_only = re.sub(r"[^a-zA-Z\s]", "", name or "").strip()
-    parts = letters_only.split()
-    firstname = parts[0].lower() if len(parts) >= 1 else "user"
-    lastname = parts[1].lower() if len(parts) >= 2 else ""
-    phone_part = _clean_phone(phone)
-    name_part = f"{firstname}_{lastname}" if lastname else firstname
-    return f"{name_part}_{phone_part}"
 
 
 def generate_device_id(user_id: str) -> str:
@@ -103,32 +82,7 @@ def generate_incident_id(device_id: str, trigger_ts: int) -> str:
     return f"{device_id}_INC{trigger_ts}"
 
 
-# ---------------------------------------------------------------------------
-# Password hashing — temporary stopgap until Firebase owns login.
-# ---------------------------------------------------------------------------
 
-_PBKDF2_ITERATIONS = 200_000
-
-
-def hash_password(password: str) -> str:
-    salt = secrets.token_hex(16)
-    digest = hashlib.pbkdf2_hmac(
-        "sha256", password.encode("utf-8"), bytes.fromhex(salt), _PBKDF2_ITERATIONS
-    ).hex()
-    return f"{salt}${_PBKDF2_ITERATIONS}${digest}"
-
-
-def verify_password(password: str, stored_hash: str) -> bool:
-    try:
-        salt, iterations, digest = stored_hash.split("$")
-        iterations = int(iterations)
-    except (ValueError, AttributeError):
-        return False
-
-    candidate = hashlib.pbkdf2_hmac(
-        "sha256", password.encode("utf-8"), bytes.fromhex(salt), iterations
-    ).hex()
-    return hmac.compare_digest(candidate, digest)
 
 
 # ---------------------------------------------------------------------------
@@ -154,8 +108,7 @@ async def init_user_tables():
                 dob             DATE NOT NULL,
                 phone           TEXT NOT NULL UNIQUE,
                 email           TEXT NOT NULL UNIQUE,
-                password_hash   TEXT NOT NULL,
-                verified        BOOLEAN NOT NULL DEFAULT FALSE,
+                phone_verified  BOOLEAN NOT NULL DEFAULT FALSE,
                 created_at      BIGINT NOT NULL
             )
         """)
@@ -327,27 +280,22 @@ async def mark_email_failed(email_id: int, error: str) -> bool:
 # Users
 # ---------------------------------------------------------------------------
 
-async def create_user(name: str, dob: date, phone: str, email: str, password: str) -> dict:
+async def create_user(user_id: str, name: str, dob: date, phone: str, email: str) -> dict:
     """
-    Creates a user row with verified=True immediately — the Apps Script
-    already proved email ownership via OTP before this function is ever
-    called. Raises asyncpg.UniqueViolationError if phone, email, or the
-    derived user_id already exist.
+    Creates a user row with verified=True immediately.
+    Raises asyncpg.UniqueViolationError if phone, email, or user_id already exist.
     """
     from app import db as dbmod
     pool = dbmod._pool
 
-    user_id = generate_user_id(name, phone)
     now = int(datetime.utcnow().timestamp())
-    pw_hash = hash_password(password)
-
     async with pool.acquire() as conn:
         await conn.execute(
             """
-            INSERT INTO users (user_id, name, dob, phone, email, password_hash, verified, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, TRUE, $7)
+            INSERT INTO users (user_id, name, dob, phone, email, phone_verified, created_at)
+            VALUES ($1, $2, $3, $4, $5, TRUE, $6)
             """,
-            user_id, name, dob, phone, email, pw_hash, now,
+            user_id, name, dob, phone, email, now,
         )
         await conn.execute(
             """
@@ -391,15 +339,7 @@ async def get_user_by_email(email: str) -> Optional[dict]:
         return dict(row) if row else None
 
 
-async def verify_login(email: str, password: str) -> Optional[dict]:
-    user = await get_user_by_email(email)
-    if not user:
-        return None
-    if not user["verified"]:
-        return None
-    if not verify_password(password, user["password_hash"]):
-        return None
-    return user
+
 
 
 # ---------------------------------------------------------------------------

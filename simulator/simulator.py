@@ -33,8 +33,8 @@ except ImportError:
 parser = argparse.ArgumentParser(description="ResQNet Device Simulator")
 parser.add_argument(
     "--url",
-    default="http://127.0.0.1:8000/device/update",
-    help="Backend /device/update endpoint (default: http://127.0.0.1:8000/device/update)"
+    default="https://resqnet-gti8.onrender.com/device/update",
+    help="Backend /device/update endpoint (default: https://resqnet-gti8.onrender.com/device/update)"
 )
 parser.add_argument(
     "--id",

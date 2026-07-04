@@ -36,11 +36,11 @@ class DeviceRegister(BaseModel):
 
 class UserRegister(BaseModel):
     """Used by POST /user/register — create user account after email OTP verified."""
+    user_id: str = Field(..., min_length=1, max_length=128)
     name: str = Field(..., min_length=1, max_length=100)
-    dob: str  # YYYY-MM-DD
+    dob: date  # YYYY-MM-DD
     phone: str = Field(..., min_length=10, max_length=15)
     email: str = Field(..., min_length=5, max_length=255)
-    password: str = Field(..., min_length=8, max_length=255)
 
     @field_validator("phone")
     @classmethod
@@ -52,20 +52,13 @@ class UserRegister(BaseModel):
 
     @field_validator("dob")
     @classmethod
-    def dob_not_future(cls, v: str) -> str:
-        try:
-            parsed = date.fromisoformat(v)
-        except ValueError:
-            raise ValueError("dob must be in YYYY-MM-DD format")
-        if parsed >= date.today():
+    def dob_not_future(cls, v: date) -> date:
+        if v >= date.today():
             raise ValueError("Date of birth must be in the past")
         return v
 
 
-class UserLogin(BaseModel):
-    """Used by POST /user/login."""
-    email: str = Field(..., min_length=5, max_length=255)
-    password: str = Field(..., min_length=8, max_length=255)
+
 
 
 class EmailQueueMarkFailed(BaseModel):

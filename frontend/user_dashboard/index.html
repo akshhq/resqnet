@@ -83,26 +83,7 @@
   </div>
 </div>
 
-<!-- ════════════════════════════════════════════
-     VIEW: otp  (registration only — email verification via Apps Script)
-════════════════════════════════════════════ -->
-<div id="view-otp" class="view">
-  <div class="auth-card">
-    <div class="auth-logo">📲</div>
-    <h2 class="otp-title">Verify Your Email</h2>
-    <p class="otp-sub" id="otp-hint">Enter the 6-digit code sent to your email.</p>
 
-    <!-- Verification code input, submitted to POST /user/verify-otp -->
-    <div id="otp-input-container">
-      <input id="otp-code-input" type="text" inputmode="numeric" maxlength="6"
-             placeholder="••••••" class="otp-code-field">
-      <button class="btn-primary" id="otp-submit-btn">Verify Code</button>
-      <button class="btn-ghost btn-sm" id="otp-resend-btn" style="width:100%;margin-top:8px;">Resend Code</button>
-    </div>
-
-    <button class="btn-ghost" id="otp-back-btn">← Back</button>
-  </div>
-</div>
 
 <!-- ════════════════════════════════════════════
      VIEW: home  (device cards + add device)
@@ -296,22 +277,11 @@
   </div>
 </div>
 
-<!-- Config: set these before the scripts below load -->
+<!-- Config -->
 <script>
   window.RESQNET_BACKEND_URL = "https://resqnet-gti8.onrender.com";
-
-  // Registration OTP is handled by a separate Google Apps Script web app
-  // (see OTP_Registration_Backend.gs). Paste your deployed Web App URL
-  // and the SHARED_KEY you set in that script's Script Properties.
-  window.RESQNET_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxkTDAmuqGjeD9cjNKIZRwZ7CZvtIK-5Lpmump7ysVWyZ4DoVfRvtj0MyS1lHJCRE3N/exec";
-  window.RESQNET_SHARED_KEY  = "44eaa2e5b2dd6acee7cda2dce6f8499036cf272b761ad765970ec23fb385024d";  // must match SHARED_KEY in the Apps Script — see OTP_Registration_Backend.gs
 </script>
 
-<!-- Registration OTP client (talks to the Apps Script web app directly —
-     not to our backend). Must load before app.js, which calls its
-     registerUser()/verifyOtp()/resendOtp() functions. -->
-<script src="otp-frontend.js"></script>
-
-<script src="app.js"></script>
+<script type="module" src="app.js"></script>
 </body>
 </html>

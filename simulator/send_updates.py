@@ -2,7 +2,7 @@ import os
 import time
 import requests
 
-URL = "http://127.0.0.1:8000/device/update"
+URL = "https://resqnet-gti8.onrender.com/device/update"
 
 # 5.1: read API key from environment
 API_KEY = os.getenv("API_KEY", "")
