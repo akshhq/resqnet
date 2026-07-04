@@ -86,7 +86,7 @@ async def _trigger_responder_alert(device_id: str, user_id: str, name: str,
         print(f"[WARNING] Could not load responders for {user_id}: {e}")
 
     try:
-        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
             res = await client.post(
                 SESSION_TOKEN_WEBAPP_URL,
                 content=json.dumps({
