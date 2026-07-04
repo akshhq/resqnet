@@ -25,7 +25,7 @@ All three require the header `X-API-Key: <your key>` **only if** `API_KEY`
 is set in the backend's `.env`. If it's unset (dev mode), the header is
 ignored — you can omit it entirely while testing.
 
-Base URL: `http://127.0.0.1:8000` (or wherever the backend is deployed —
+Base URL: `https://resqnet-gti8.onrender.com` (or wherever the backend is deployed —
 Apps Script's `UrlFetchApp` can reach any public URL, so for a script
 running in the cloud you'll need the backend reachable at a real address,
 not `127.0.0.1`).

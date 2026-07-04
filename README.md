@@ -166,9 +166,9 @@ cd frontend/responder_dashboard && python -m http.server 5502
 
 ### Seed a demo account
 ```bash
-python simulator/seed_simulator_user.py --url http://127.0.0.1:8000 --key <API_KEY>
+python simulator/seed_simulator_user.py --url https://resqnet-gti8.onrender.com --key <API_KEY>
 # prints a device_id — feed it straight into the simulator:
-python simulator/simulator.py --demo --id <device_id> --url http://127.0.0.1:8000/device/update --key <API_KEY>
+python simulator/simulator.py --demo --id <device_id> --url https://resqnet-gti8.onrender.com/device/update --key <API_KEY>
 ```
 Log into the User Dashboard with `simulator@resqnet.demo` / `SimulatorDemo123!` to watch that account's device, incidents, and contacts update live.
 
