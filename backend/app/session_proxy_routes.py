@@ -42,7 +42,7 @@ async def _call_apps_script(payload: dict) -> dict:
             detail="Session token service is not configured on this server.",
         )
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
             res = await client.post(
                 SESSION_TOKEN_WEBAPP_URL,
                 content=json.dumps(payload),
