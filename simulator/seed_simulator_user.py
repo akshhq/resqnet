@@ -66,6 +66,7 @@ def main():
     parser.add_argument("--url", default="https://resqnet-gti8.onrender.com",
                          help="Backend base URL (default: production Render URL)")
     parser.add_argument("--key", default=os.getenv("API_KEY", ""),
+                         help="API key for backend auth. Reads API_KEY env var if not set.")
     parser.add_argument("--uid", default="",
                          help="Target Firebase user_id. If provided, registers a device for this user instead of the default simulator user.")
     args = parser.parse_args()

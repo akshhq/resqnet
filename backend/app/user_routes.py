@@ -28,31 +28,18 @@ router = APIRouter(prefix="/user", tags=["user"])
 # ---------------------------------------------------------------------------
 # Registration + Login
 #
-# Registration OTP is handled ENTIRELY by an external Google Apps Script
-# web app (OTP_Registration_Backend.gs) — its own Sheet, its own regId,
-# its own OTP round-trip. This backend is not involved in that exchange at
-# all. The frontend flow is:
-#
-#   1. Frontend calls the Apps Script's action=register directly (not this
-#      backend) — Apps Script emails an OTP and returns a regId.
-#   2. Frontend calls the Apps Script's action=verify with the code the user
-#      typed — THIS is the authoritative proof of email ownership.
-#   3. Only once that succeeds does the frontend call THIS backend's
-#      POST /user/register — which creates the actual ResQNet domain
-#      record (user_id, hashed password) with verified=True immediately,
-#      since email ownership was already proven in step 2.
-#
-# Login is separate and uses a password — deliberately NOT OTP. This is a
-# temporary stopgap; Firebase will eventually own login entirely, at which
-# point POST /user/login and verify_login() can be retired.
+# Auth is now Firebase. The frontend (app.js) signs up/in via Firebase,
+# then calls POST /user/register with the Firebase UID as user_id to create
+# the backend profile. No OTP round-trip through this backend; no passwords
+# stored. See app.js for the client-side flow.
 # ---------------------------------------------------------------------------
 
 @router.post("/register", dependencies=[Depends(verify_api_key)])
 async def register_user(data: UserRegister):
     """
-    Creates the ResQNet user record. Call this ONLY after the frontend has
-    already completed the Apps Script's OTP verify step — this endpoint
-    performs no OTP check of its own; it trusts that the caller already did.
+    Creates the ResQNet backend profile for a Firebase-authenticated user.
+    Called by the frontend after Firebase sign-up succeeds. user_id must
+    be the Firebase UID. No password is accepted or stored.
     """
     try:
         user = await user_db.create_user(

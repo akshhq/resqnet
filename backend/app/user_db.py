@@ -4,8 +4,8 @@ incidents for ResQNet's User Dashboard.
 
 Schema overview (4 core tables, per spec)
 ──────────────────────────────────────────
-users              — one row per registered person. Includes password_hash
-                      (temporary — Firebase will eventually own auth).
+users              — one row per registered person. Firebase UID is used
+                      as user_id. No password stored — Firebase owns auth.
 devices            — one row per physical device. No owner column here —
                       ownership lives in user_devices.
 user_devices       — relation table: which user owns which device.
@@ -43,14 +43,8 @@ user_id   = "<firstname>_<lastname>_<phonenumber>"   e.g. "aksh_kumar_9876543210
 device_id = "<user_id>_<5-digit>"    e.g. "aksh_kumar_9876543210_48213"
 """
 
-import hashlib
-import hmac
 import json
-import os
 import random
-import re
-import secrets
-import string
 from datetime import datetime, date
 from typing import Optional
 
@@ -308,12 +302,6 @@ async def create_user(user_id: str, name: str, dob: date, phone: str, email: str
 
     return {"user_id": user_id, "name": name, "dob": dob.isoformat(), "phone": phone, "email": email}
 
-
-async def mark_verified(user_id: str) -> None:
-    from app import db as dbmod
-    pool = dbmod._pool
-    async with pool.acquire() as conn:
-        await conn.execute("UPDATE users SET verified = TRUE WHERE user_id = $1", user_id)
 
 
 async def get_user(user_id: str) -> Optional[dict]:

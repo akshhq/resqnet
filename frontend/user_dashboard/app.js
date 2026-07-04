@@ -4,23 +4,25 @@
 // Uses Firebase for Auth, Neon Postgres (via Backend) for everything else.
 // ─────────────────────────────────────────────────────────────────────────────
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-app.js";
-import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, sendEmailVerification } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-auth.js";
+import { 
+  getAuth, 
+  createUserWithEmailAndPassword, 
+  signInWithEmailAndPassword, 
+  signOut, 
+  sendEmailVerification,
+  GoogleAuthProvider,
+  signInWithPopup,
+  RecaptchaVerifier,
+  signInWithPhoneNumber,
+  onAuthStateChanged
+} from "https://www.gstatic.com/firebasejs/12.15.0/firebase-auth.js";
 
-const firebaseConfig = {
-  apiKey: "AIzaSyD04oUsSFsoIgt5Ue-EqFe540CxIboCgSc",
-  authDomain: "resqnet-users.firebaseapp.com",
-  projectId: "resqnet-users",
-  storageBucket: "resqnet-users.firebasestorage.app",
-  messagingSenderId: "836313627257",
-  appId: "1:836313627257:web:0c0b87427050adfd0972a8",
-  measurementId: "G-R34SY5S2ST"
-};
-
+const firebaseConfig = window.firebaseConfig || {};
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 
 
-const BACKEND = window.RESQNET_BACKEND_URL || "https://resqnet-gti8.onrender.com";
+const BACKEND = (window.RESQNET_CONFIG && window.RESQNET_CONFIG.BACKEND_URL) || "https://resqnet-gti8.onrender.com";
 
 // ── Auth / API key headers (reuses the same optional API key system as Trial_Dashboard) ──
 function _getApiKey() {
@@ -180,7 +182,81 @@ document.getElementById("login-btn").addEventListener("click", async () => {
   try {
     const userCredential = await signInWithEmailAndPassword(auth, email, password);
     showToast("Signed in.", "success");
-    setLoggedIn(userCredential.user.uid);
+    // Registration with backend handles user creation, setLoggedIn will be called via onAuthStateChanged or directly
+  } catch (err) {
+    showToast(err.message, "error");
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LOGIN — Google Auth
+// ─────────────────────────────────────────────────────────────────────────────
+const googleProvider = new GoogleAuthProvider();
+document.getElementById("google-login-btn").addEventListener("click", async () => {
+  try {
+    const result = await signInWithPopup(auth, googleProvider);
+    showToast("Signed in with Google.", "success");
+    
+    // Ensure user profile exists on backend
+    try {
+      await api("POST", "/user/register", { 
+        user_id: result.user.uid,
+        name: result.user.displayName || "Google User",
+        dob: "2000-01-01", // Placeholder for Google auth
+        phone: result.user.phoneNumber || "",
+        email: result.user.email 
+      });
+    } catch(e) { /* Might already exist */ }
+  } catch (err) {
+    showToast(err.message, "error");
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LOGIN — Phone Auth
+// ─────────────────────────────────────────────────────────────────────────────
+let confirmationResult = null;
+
+// Initialize Recaptcha after DOM load
+window.recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
+  'size': 'invisible'
+});
+
+document.getElementById("send-otp-btn").addEventListener("click", async () => {
+  const phoneNumber = document.getElementById("login-phone").value.trim();
+  if (!phoneNumber) {
+    showToast("Please enter a phone number", "error");
+    return;
+  }
+  
+  try {
+    const appVerifier = window.recaptchaVerifier;
+    confirmationResult = await signInWithPhoneNumber(auth, phoneNumber, appVerifier);
+    document.getElementById("otp-container").classList.remove("hidden");
+    showToast("OTP sent!", "success");
+  } catch (err) {
+    showToast(err.message, "error");
+  }
+});
+
+document.getElementById("verify-otp-btn").addEventListener("click", async () => {
+  const code = document.getElementById("login-otp").value.trim();
+  if (!code || !confirmationResult) return;
+
+  try {
+    const result = await confirmationResult.confirm(code);
+    showToast("Signed in with Phone.", "success");
+    
+    // Ensure user profile exists on backend
+    try {
+      await api("POST", "/user/register", { 
+        user_id: result.user.uid,
+        name: "Phone User",
+        dob: "2000-01-01",
+        phone: result.user.phoneNumber || "",
+        email: "" 
+      });
+    } catch(e) { /* Might already exist */ }
   } catch (err) {
     showToast(err.message, "error");
   }
@@ -519,11 +595,15 @@ function viewIncidentReplay(incidentId) {
 // Boot
 // ─────────────────────────────────────────────────────────────────────────────
 
-if (currentUserId) {
-  setLoggedIn(currentUserId);
-} else {
-  showView("auth");
-}
+onAuthStateChanged(auth, (user) => {
+  if (user) {
+    setLoggedIn(user.uid);
+  } else {
+    currentUserId = null;
+    localStorage.removeItem("resqnet_user_id");
+    showView("auth");
+  }
+});
 
 // Expose globals for inline event handlers (since this is now a module)
 window.removeDeviceConfirm = removeDeviceConfirm;

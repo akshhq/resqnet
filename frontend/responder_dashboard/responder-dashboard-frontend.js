@@ -16,7 +16,7 @@
 // the backend, resolve incidents promptly (which kills the link), and
 // avoid forwarding these emails/links outside your responder group.
 
-const WEB_APP_URL = window.RESQNET_SESSION_TOKEN_URL || "https://script.google.com/macros/s/AKfycbxKCrT4zueJWbdPSpSPAnkCOaz1beC0l_zz_Gs62FqMX3mjYTyFns6yeg_x6zrBj0kIgQ/exec";
+const WEB_APP_URL = (window.RESQNET_CONFIG && window.RESQNET_CONFIG.SESSION_TOKEN_URL) || "https://script.google.com/macros/s/AKfycbxKCrT4zueJWbdPSpSPAnkCOaz1beC0l_zz_Gs62FqMX3mjYTyFns6yeg_x6zrBj0kIgQ/exec";
 
 // ── Called from script.js's checkUrlParams() when ?uid=&token= are present ──
 // Validates the magic link against the Apps Script and returns the result

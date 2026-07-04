@@ -2,7 +2,8 @@ import os
 import time
 import requests
 
-URL = "https://resqnet-gti8.onrender.com/device/update"
+BACKEND_URL = os.getenv("RESQNET_BACKEND_URL", "https://resqnet-gti8.onrender.com")
+URL = f"{BACKEND_URL.rstrip('/')}/device/update"
 
 # 5.1: read API key from environment
 API_KEY = os.getenv("API_KEY", "")

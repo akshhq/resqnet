@@ -1,7 +1,6 @@
 from pydantic import BaseModel, Field, EmailStr, field_validator
 from datetime import date
 from typing import Optional
-from pydantic import BaseModel, Field
 
 
 class DeviceUpdate(BaseModel):
@@ -20,18 +19,11 @@ class DeviceRegister(BaseModel):
     device_id: str = Field(..., min_length=1, max_length=64)
 
 
-# ---------------------------------------------------------------------------
-# User Dashboard — registration, login, contacts, devices, preferences
+# User Dashboard — registration, contacts, devices, preferences
 #
-# Registration OTP is handled entirely by an external Google Apps Script
-# web app (its own Sheet, its own regId, its own OTP round-trip) — this
-# backend is called ONLY after that Apps Script has already confirmed the
-# email via OTP. This endpoint's job is purely to create the ResQNet domain
-# record (user_id, password hash) once that proof already happened.
-#
-# Login is separate and uses a password — NOT OTP. See UserLogin below.
-# This password auth is a temporary stopgap; Firebase will eventually own
-# user login, at which point UserLogin/verify_login can be retired.
+# Auth is handled by Firebase. The frontend registers with Firebase first,
+# then POSTs to /user/register with the Firebase UID as user_id. No
+# passwords are stored or checked by this backend.
 # ---------------------------------------------------------------------------
 
 class UserRegister(BaseModel):

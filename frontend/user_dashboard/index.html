@@ -54,6 +54,26 @@
         <input id="login-password" type="password" placeholder="••••••••">
       </div>
       <button class="btn-primary" id="login-btn">Sign In</button>
+      
+      <div style="margin: 16px 0; text-align: center; color: #64748b; font-size: 0.9em;">OR</div>
+      
+      <button class="btn-outline" id="google-login-btn" style="width: 100%; margin-bottom: 8px;">Sign In with Google</button>
+      
+      <div class="field" style="margin-top: 16px;">
+        <label>Phone Number Sign In</label>
+        <div style="display: flex; gap: 8px;">
+          <input id="login-phone" type="tel" placeholder="+1234567890">
+          <button class="btn-secondary" id="send-otp-btn">Send OTP</button>
+        </div>
+      </div>
+      <div class="field hidden" id="otp-container" style="margin-top: 8px;">
+        <div style="display: flex; gap: 8px;">
+          <input id="login-otp" type="text" placeholder="123456">
+          <button class="btn-primary" id="verify-otp-btn">Verify</button>
+        </div>
+      </div>
+      <!-- reCAPTCHA container for Phone Auth -->
+      <div id="recaptcha-container" style="margin-top: 8px;"></div>
     </div>
 
     <!-- Register -->
@@ -278,9 +298,7 @@
 </div>
 
 <!-- Config -->
-<script>
-  window.RESQNET_BACKEND_URL = "https://resqnet-gti8.onrender.com";
-</script>
+<script src="config.js"></script>
 
 <script type="module" src="app.js"></script>
 </body>

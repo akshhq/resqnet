@@ -3,8 +3,8 @@
 // All simulation runs in the browser. No Python simulator needed.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const BACKEND = "https://resqnet-gti8.onrender.com";
-const WS_URL  = window.RESQNET_WS_URL || "wss://resqnet-gti8.onrender.com/ws/live";
+const BACKEND = (window.RESQNET_CONFIG && window.RESQNET_CONFIG.BACKEND_URL) || "https://resqnet-gti8.onrender.com";
+const WS_URL  = (window.RESQNET_CONFIG && window.RESQNET_CONFIG.WS_URL) || "wss://resqnet-gti8.onrender.com/ws/live";
 // ── Auth ─────────────────────────────────────────────────────────────────────
 function _getApiKey() {
   return window.RESQNET_API_KEY || sessionStorage.getItem("resqnet_api_key") || "";

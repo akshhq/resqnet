@@ -39,6 +39,10 @@ htmlcov/
 .env.*
 !.env.example
 
+# Generated frontend config — built from .env at deploy time, never committed
+frontend/**/config.js
+Trial_Dashboard/config.js
+
 
 # ── Logs ─────────────────────────────────
 *.log
