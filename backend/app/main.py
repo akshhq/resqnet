@@ -151,7 +151,7 @@ app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 # CORS
 _raw_origins = os.getenv(
     "CORS_ORIGINS",
-    "http://localhost:5500,http://127.0.0.1:5500,http://localhost:5501,http://127.0.0.1:5501"
+    "http://localhost:5500,http://127.0.0.1:5500,http://localhost:5501,http://127.0.0.1:5501,http://localhost:5502,http://127.0.0.1:5502"
 )
 ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 
@@ -162,6 +162,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+print(f"  CORS origins allowed: {ALLOWED_ORIGINS}")
 
 manager = ConnectionManager()
 
