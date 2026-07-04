@@ -69,6 +69,21 @@ To verify database persistence and endpoints on the local backend:
 python scratch/test_user_flow.py
 ```
 
+### 5. Running the Device Simulator
+To seed a test user and run the device simulator:
+
+**For Live System:**
+```bash
+python simulator/seed_simulator_user.py --url https://resqnet-gti8.onrender.com --uid #
+python simulator/simulator.py --demo --id # --url https://resqnet-gti8.onrender.com/device/update
+```
+
+**For Local System:**
+```bash
+python seed_simulator_user.py --url http://127.0.0.1:8000 --uid #
+python simulator.py --demo --id # --url http://127.0.0.1:8000/device/update
+```
+
 ---
 
 ## 🚀 Condition 2: Running Everything on Live System

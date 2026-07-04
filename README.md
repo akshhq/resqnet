@@ -317,10 +317,11 @@ Other protections: rate limiting via `slowapi` (60/min on `/device/update`, 30/m
 ## Simulator
 
 ```bash
-python simulator/simulator.py                          # interactive
-python simulator/simulator.py --demo                    # scripted demo, no keypresses
-python simulator/simulator.py --id DEVICE_02 --key <k>   # custom device / auth
-python simulator/seed_simulator_user.py --url <base> --key <k>   # create a demo account + device
+python simulator/seed_simulator_user.py --url https://resqnet-gti8.onrender.com --uid #
+python simulator/simulator.py --demo --id # --url https://resqnet-gti8.onrender.com/device/update
+# OR
+python seed_simulator_user.py --url http://127.0.0.1:8000 --uid #
+python simulator.py --demo --id # --url http://127.0.0.1:8000/device/update
 ```
 
 Interactive keys: `p` panic · `r` reset · `0`–`3` mode · `t` sharp turn · `q` quit.

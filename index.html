@@ -675,6 +675,14 @@
           <div class="card-desc" style="margin-bottom:12px">
             Add simulated devices, trigger panics, change movement modes, and watch the system respond in real time.
             Wired to the live backend — every button press hits a real API endpoint.
+            <div style="margin-top: 12px; background: rgba(0,0,0,0.3); padding: 12px; border-radius: 6px; font-family: 'JetBrains Mono', monospace; font-size: 11px; line-height: 1.5; color: var(--sec); border: 1px solid var(--border);">
+              <strong style="color: var(--text);">Simulate a device on a user:</strong><br/>
+              <span style="color: var(--blue);">python simulator/seed_simulator_user.py --url https://resqnet-gti8.onrender.com --uid #</span><br/>
+              <span style="color: var(--blue);">python simulator/simulator.py --demo --id # --url https://resqnet-gti8.onrender.com/device/update</span><br/>
+              <em style="color: var(--mut); display: block; margin: 4px 0;">-- OR --</em>
+              <span style="color: var(--green);">python seed_simulator_user.py --url http://127.0.0.1:8000 --uid #</span><br/>
+              <span style="color: var(--green);">python simulator.py --demo --id # --url http://127.0.0.1:8000/device/update</span>
+            </div>
           </div>
           <div class="card-features">
             <span class="feat-tag">Device simulator</span>
