@@ -88,11 +88,12 @@ body {
   padding: 24px 16px;
 }
 .auth-card {
-  width: 100%; max-width: 400px;
+  width: min(100%, 400px);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 32px 28px;
+  margin: auto;
 }
 .auth-logo {
   font-size: 32px; text-align: center;
