@@ -36,7 +36,20 @@ async function api(method, path, body) {
   let data = null;
   try { data = await res.json(); } catch { /* no body */ }
   if (!res.ok) {
-    const msg = (data && data.detail) ? data.detail : `Request failed (${res.status})`;
+    let msg = `Request failed (${res.status})`;
+    if (data && data.detail) {
+      if (Array.isArray(data.detail)) {
+        // FastAPI/Pydantic 422 shape: [{ loc: [...], msg: "...", type: "..." }, ...]
+        msg = data.detail
+          .map((e) => {
+            const field = Array.isArray(e.loc) ? e.loc[e.loc.length - 1] : "field";
+            return `${field}: ${e.msg}`;
+          })
+          .join("; ");
+      } else {
+        msg = data.detail;
+      }
+    }
     throw new Error(msg);
   }
   return data;
