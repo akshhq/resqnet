@@ -152,7 +152,7 @@ Your static frontends (User Dashboard, Responder Dashboard, Trial Dashboard) are
 To verify the entire live environment, use the Python simulator to register a user and run a live tracking path.
 
 1. **Seed a new User Profile & Device**:
-   Replace `#` with your custom Firebase User UID (e.g., `3fIPL5Y3MQTMf4q857zub1GgfN62`) to create a profile and default device registered to them in the live Neon Postgres database:
+   Sign In or Register in user dashboard to get the UID (Located under `Hi, *Name*`) Replace `#` with your that UID (e.g., `3fIPL5Y3MQTMf4q857zub1GgfN62`) to create a profile and default device registered to them in the live Neon Postgres database:
    ```bash
    python simulator/seed_simulator_user.py --url https://backend_link.com --uid 3fIPL5Y3vMQTMf4q85G7zub1GgfN62
    ```
