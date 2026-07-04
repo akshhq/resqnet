@@ -105,6 +105,11 @@ async def _trigger_responder_alert(device_id: str, user_id: str, name: str,
             if not data.get("success"):
                 print(f"[WARNING] Session-token Apps Script returned failure: {data.get('error')}")
                 return None
+
+            if data.get("emailErrors"):
+                for err in data["emailErrors"]:
+                    print(f"[WARNING] Apps Script Email dispatch failed: {err}")
+
             return data
     except Exception as e:
         print(f"[WARNING] Failed to reach session-token Apps Script: {e}")

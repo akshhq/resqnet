@@ -94,12 +94,22 @@ function handleTrigger(body) {
   ]);
 
   var link = buildLink(userId, token);
-  sendEmergencyEmail({ userId, name, deviceId, lat, lng, link, responderEmails: responderEmails });
+  var emailErrors = [];
+  var errors1 = sendEmergencyEmail({ userId, name, deviceId, lat, lng, link, responderEmails: responderEmails });
+  emailErrors = emailErrors.concat(errors1);
   if (contactEmails.length) {
-    sendContactAlertEmails({ contactEmails, name, link });
+    var errors2 = sendContactAlertEmails({ contactEmails, name, link });
+    emailErrors = emailErrors.concat(errors2);
   }
 
-  return { success: true, reused: false, token: token, link: link, expiresAt: expiresAt.getTime() };
+  return { 
+    success: true, 
+    reused: false, 
+    token: token, 
+    link: link, 
+    expiresAt: expiresAt.getTime(),
+    emailErrors: emailErrors 
+  };
 }
 
 // ================== VALIDATE ==================
@@ -244,13 +254,16 @@ function sendEmergencyEmail(p) {
     }
   });
 
+  var errors = [];
   uniqueTargets.forEach(function (email) {
     try {
       MailApp.sendEmail(email, subject, body);
     } catch (e) {
+      errors.push("Responder (" + email + "): " + e.toString());
       Logger.log("Failed to send email to responder " + email + ": " + e);
     }
   });
+  return errors;
 }
 
 function sendContactAlertEmails(p) {
@@ -261,11 +274,14 @@ function sendContactAlertEmails(p) {
              "Please take appropriate actions immediately.\n\n" +
              "— ResQNet Response Network Service";
 
+  var errors = [];
   p.contactEmails.forEach(function (email) {
     try {
       MailApp.sendEmail(email.trim(), subject, body);
     } catch (e) {
+      errors.push("Contact (" + email + "): " + e.toString());
       Logger.log("Failed to send email to contact " + email + ": " + e);
     }
   });
+  return errors;
 }
