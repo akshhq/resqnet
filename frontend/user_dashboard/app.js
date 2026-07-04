@@ -17,12 +17,13 @@ import {
   onAuthStateChanged
 } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-auth.js";
 
+const RESQNET_CONFIG = window.RESQNET_CONFIG || {};
 const firebaseConfig = window.firebaseConfig || {};
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 
 
-const BACKEND = RESQNET_CONFIG.BACKEND_URL;
+const BACKEND = RESQNET_CONFIG.BACKEND_URL || "";
 
 // ── Auth / API key headers (reuses the same optional API key system as Trial_Dashboard) ──
 function _getApiKey() {
