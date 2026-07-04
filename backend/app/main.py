@@ -1,9 +1,8 @@
 import os
 from collections import deque
 from contextlib import asynccontextmanager
-import hashlib
-import secrets
 
+import httpx
 from dotenv import load_dotenv
 load_dotenv()   # loads backend/.env if present — must run before os.getenv() calls
 
@@ -14,7 +13,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from starlette.requests import Request
 
-from app.schemas import DeviceUpdate, DeviceRegister, UserRegister, UserLogin
+from app.schemas import DeviceUpdate, DeviceRegister
 from app.storage import (
     device_state,
     device_history,
@@ -33,6 +32,9 @@ from app.context import (
 from app.websocket import ConnectionManager
 from app.auth import verify_api_key, verify_ws_token, rate_limit_exceeded_handler
 from app import db
+from app import user_db
+from app.user_routes import router as user_router
+from app.email_queue_routes import router as email_queue_router
 
 
 # ---------------------------------------------------------------------------
@@ -40,6 +42,63 @@ from app import db
 # ---------------------------------------------------------------------------
 
 limiter = Limiter(key_func=get_remote_address, default_limits=[])
+
+
+# ---------------------------------------------------------------------------
+# Emergency notification config — the session-token Apps Script that emails
+# responders (and, per contact, emergency contacts) a magic link to the
+# responder dashboard. Server-to-server call, not client-facing.
+# ---------------------------------------------------------------------------
+
+SESSION_TOKEN_WEBAPP_URL = os.getenv("SESSION_TOKEN_WEBAPP_URL", "").strip()
+
+
+async def _trigger_responder_alert(device_id: str, user_id: str, name: str,
+                                    lat: float, lng: float) -> dict | None:
+    """
+    Calls the emergency session-token Apps Script's action=trigger, which:
+      - generates a 6-char responder-dashboard token,
+      - emails RESPONDER_EMAILS (fixed list) the magic link,
+      - ALSO emails every address in contactEmails (this user's emergency
+        contacts) the same link, per spec.
+    Returns the Apps Script's JSON response (token, link, expiresAt) or
+    None if the webapp URL isn't configured / the call fails — an
+    emergency is never blocked on this succeeding.
+    """
+    if not SESSION_TOKEN_WEBAPP_URL:
+        print("⚠️  SESSION_TOKEN_WEBAPP_URL not set — skipping responder alert email.")
+        return None
+
+    contact_emails: list[str] = []
+    try:
+        contacts = await user_db.list_emergency_contacts(user_id)
+        contact_emails = [c["email"] for c in contacts if c.get("notify_email") and c.get("email")]
+    except Exception as e:
+        print(f"⚠️  Could not load emergency contacts for {user_id}: {e}")
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.post(
+                SESSION_TOKEN_WEBAPP_URL,
+                content=__import__("json").dumps({
+                    "action": "trigger",
+                    "userID": user_id,
+                    "deviceID": device_id,
+                    "name": name,
+                    "lat": lat,
+                    "lng": lng,
+                    "contactEmails": contact_emails,
+                }),
+                headers={"Content-Type": "text/plain;charset=utf-8"},
+            )
+            data = res.json()
+            if not data.get("success"):
+                print(f"⚠️  Session-token Apps Script returned failure: {data.get('error')}")
+                return None
+            return data
+    except Exception as e:
+        print(f"⚠️  Failed to reach session-token Apps Script: {e}")
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -56,7 +115,7 @@ async def lifespan(app: FastAPI):
 
     api_key = os.getenv("API_KEY", "").strip()
     print("=" * 52)
-    print("  ResQNet Backend v0.6")
+    print("  ResQNet Backend v0.7")
     print("=" * 52)
     if api_key:
         print(f"  Auth     : ENABLED  (API_KEY is set)")
@@ -69,7 +128,11 @@ async def lifespan(app: FastAPI):
         print("  Auth     : DISABLED (no API_KEY in .env)")
         print("  All requests accepted — dev mode.")
 
+    if not SESSION_TOKEN_WEBAPP_URL:
+        print("  Responder alerts : DISABLED (SESSION_TOKEN_WEBAPP_URL not set)")
+
     await db.init_db()
+    await user_db.init_user_tables()
     print("=" * 52)
     yield
     await db.close_db()
@@ -79,7 +142,7 @@ async def lifespan(app: FastAPI):
 # App
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="ResQNet Backend", version="0.5", lifespan=lifespan)
+app = FastAPI(title="ResQNet Backend", version="0.7", lifespan=lifespan)
 
 # Attach rate-limit exceeded handler
 app.state.limiter = limiter
@@ -102,35 +165,10 @@ app.add_middleware(
 
 manager = ConnectionManager()
 
-
-# ---------------------------------------------------------------------------
-# User Management (in-memory for now — TODO: migrate to Postgres)
-# ---------------------------------------------------------------------------
-
-# In-memory user store: { user_id: { email, password_hash, name, dob, phone, ... } }
-users_db = {}
-next_user_id = 1000
-
-def hash_password(password: str) -> str:
-    """Hash password with a salt using SHA256. Simple but not bcrypt — good enough for now."""
-    salt = secrets.token_hex(16)
-    hashed = hashlib.sha256((salt + password).encode()).hexdigest()
-    return f"{salt}${hashed}"
-
-def verify_password(password: str, password_hash: str) -> bool:
-    """Verify a password against its hash."""
-    try:
-        salt, hashed = password_hash.split("$")
-        return hashlib.sha256((salt + password).encode()).hexdigest() == hashed
-    except:
-        return False
-
-def generate_user_id() -> str:
-    """Generate a unique user ID."""
-    global next_user_id
-    user_id = f"USER_{next_user_id}"
-    next_user_id += 1
-    return user_id
+# User Dashboard routes (register/login/contacts/devices/preferences/incidents)
+# and the email-queue polling contract used by the Apps Script sender.
+app.include_router(user_router)
+app.include_router(email_queue_router)
 
 
 # ---------------------------------------------------------------------------
@@ -259,15 +297,22 @@ async def device_update(request: Request, data: DeviceUpdate):
         device_history[data.device_id] = deque(maxlen=HISTORY_MAXLEN)
     device_history[data.device_id].append(payload)
 
+    # Keep the Postgres `devices` row's live fields in sync too, so the
+    # User Dashboard's device list reflects real-time battery/status
+    # without needing its own polling loop. Silently skipped if this
+    # device isn't a User Dashboard device (no matching row) or Postgres
+    # logging is disabled.
+    try:
+        await user_db.update_device_status(
+            data.device_id,
+            battery=data.battery,
+            last_seen=data.timestamp,
+            status=("emergency" if emergency_locked else "online"),
+        )
+    except Exception:
+        pass  # e.g. simulator/Trial_Dashboard devices with no `devices` row
+
     # ── Postgres logging ──────────────────────────────────────────────────
-    # 1. Every tick always goes into the device's normal circular-buffer
-    #    table (500-row cap, enqueue+dequeue once full).
-    # 2. If this tick is part of an active emergency, it ALSO gets appended
-    #    to that emergency's dedicated table (uncapped).
-    # 3. Emergency start (False→True transition): create the emergency
-    #    table, pre-seed it with 5 min of pre-trigger context.
-    # 4. Emergency end (reset): mark the emergency table closed with an
-    #    end timestamp. The table itself is never deleted.
     await db.insert_normal_log(data.device_id, payload)
 
     was_emergency_before = prev.get("emergency", False)
@@ -277,6 +322,29 @@ async def device_update(request: Request, data: DeviceUpdate):
         em_id = await db.start_emergency_log(data.device_id, data.timestamp)
         await db.append_emergency_log(data.device_id, em_id, payload)
 
+        # ── Notify responders + this device's emergency contacts ──────────
+        # Look up which User Dashboard user owns this device (None for
+        # simulator/Trial_Dashboard devices that were never registered via
+        # /user/devices/register — those just skip notification).
+        owner_user_id = None
+        try:
+            owner_user_id = await user_db.get_owner_user_id(data.device_id)
+        except Exception:
+            pass
+
+        if owner_user_id:
+            user_row = await user_db.get_user(owner_user_id)
+            display_name = user_row["name"] if user_row else owner_user_id
+            alert_result = await _trigger_responder_alert(
+                data.device_id, owner_user_id, display_name,
+                data.latitude, data.longitude,
+            )
+            responder_token = alert_result["token"] if alert_result else None
+            await user_db.create_incident(
+                data.device_id, owner_user_id, em_id, data.timestamp,
+                responder_token=responder_token,
+            )
+
     elif emergency_locked and was_emergency_before:
         # Emergency continuing — append this tick to the active emergency table
         active_em_id = await db.get_active_emergency_id(data.device_id)
@@ -285,12 +353,17 @@ async def device_update(request: Request, data: DeviceUpdate):
 
     elif was_reset and was_emergency_before:
         # Emergency just ended — close out the registry entry.
-        # The final tick itself was already an "emergency" tick a moment ago
-        # (was_emergency_before=True), so log this reset tick too before closing.
         active_em_id = await db.get_active_emergency_id(data.device_id)
         if active_em_id:
             await db.append_emergency_log(data.device_id, active_em_id, payload)
             await db.close_emergency_log(data.device_id, active_em_id, data.timestamp)
+
+        try:
+            incident = await user_db.get_active_incident_for_device(data.device_id)
+            if incident:
+                await user_db.close_incident(incident["incident_id"], data.timestamp)
+        except Exception:
+            pass
 
     await manager.broadcast(payload)
     return {"status": "broadcasted", "risk": risk}
@@ -318,71 +391,10 @@ def get_device_history(request: Request, device_id: str):
 
 
 # ---------------------------------------------------------------------------
-# User Management Endpoints (no auth for now — email OTP is the gating)
-# ─────────────────────────────────────────────────────────────────────────
-# TODO: migrate users_db from in-memory to Neon Postgres users table
+# NOTE — User registration/login/contacts/devices/preferences/incidents all
+# live in app/user_routes.py (mounted above via include_router). There used
+# to be a duplicate, in-memory-only /user/register and /user/login defined
+# directly on `app` here — removed, because it shadowed the real
+# Postgres-backed router and meant every other user endpoint (contacts,
+# devices, preferences, incidents) silently 404'd in production.
 # ---------------------------------------------------------------------------
-
-@app.post("/user/register")
-async def user_register(data: UserRegister):
-    """
-    Create a new ResQNet user account.
-    Call this AFTER the Google Apps Script has verified the email via OTP.
-    
-    Request: { name, dob, phone, email, password }
-    Response: { user_id, email }
-    """
-    # Check if email already registered
-    for user_id, user in users_db.items():
-        if user["email"].lower() == data.email.lower():
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Email '{data.email}' is already registered."
-            )
-    
-    # Create new user
-    user_id = generate_user_id()
-    users_db[user_id] = {
-        "email": data.email,
-        "password_hash": hash_password(data.password),
-        "name": data.name,
-        "dob": data.dob,
-        "phone": data.phone,
-        "created_at": int(__import__("time").time())
-    }
-    
-    print(f"✅ User registered: {user_id} ({data.email})")
-    return {"user_id": user_id, "email": data.email}
-
-
-@app.post("/user/login")
-async def user_login(data: UserLogin):
-    """
-    Login with email + password.
-    Returns user_id if credentials are valid.
-    
-    Request: { email, password }
-    Response: { user_id, email, name }
-    """
-    # Find user by email
-    for user_id, user in users_db.items():
-        if user["email"].lower() == data.email.lower():
-            # Check password
-            if verify_password(data.password, user["password_hash"]):
-                print(f"✅ User login: {user_id} ({data.email})")
-                return {
-                    "user_id": user_id,
-                    "email": user["email"],
-                    "name": user.get("name", "")
-                }
-            else:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid email or password."
-                )
-    
-    # Email not found
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Invalid email or password."
-    )

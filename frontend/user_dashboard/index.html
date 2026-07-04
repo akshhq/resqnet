@@ -134,6 +134,29 @@
       <div id="contacts-summary" class="contacts-summary"></div>
     </section>
 
+    <!-- Voice monitoring — placeholder card, not yet wired to a device mic.
+         Kept disabled/inert on purpose: real audio streaming needs backend
+         WebRTC signaling and explicit per-device consent, neither of which
+         exists yet. This just reserves the UI slot and communicates intent. -->
+    <section class="section">
+      <div class="section-title">Voice Monitoring</div>
+      <div class="card voice-card" id="voice-card">
+        <div class="voice-card-row">
+          <div class="voice-card-icon" aria-hidden="true">🎙️</div>
+          <div class="voice-card-text">
+            <div class="voice-card-title">Device microphone</div>
+            <div class="voice-card-subtitle">Not connected — coming soon</div>
+          </div>
+          <button class="btn-secondary btn-sm" id="voice-card-btn" disabled>Enable</button>
+        </div>
+        <p class="voice-card-note">
+          Once available, this will let ResQNet listen for an in-progress emergency
+          directly from your device's microphone, with your explicit consent.
+          It is not active on any device today.
+        </p>
+      </div>
+    </section>
+
   </div>
 </div>
 

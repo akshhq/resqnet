@@ -2,22 +2,25 @@
 user_db.py — User accounts, devices, emergency contacts, preferences, and
 incidents for ResQNet's User Dashboard.
 
-Schema overview
-───────────────
-users                — one row per registered person. Includes password_hash
-                        (temporary — Firebase will eventually own auth).
-emergency_contacts   — up to 3 per user, with priority + notification method
-devices              — one row per registered device, linked to a user
-user_preferences     — notification toggles + quiet hours, one row per user
-incidents            — one row per emergency event (created in Phase 4/5,
-                        but the table is created now so the schema is whole)
-email_queue          — outbound email jobs (Phase 4 emergency alerts); a
-                        Google Apps Script (owned and written by the project
-                        author, not this codebase) polls GET
-                        /email-queue/pending and sends each one via
-                        GmailApp.sendEmail(), then reports back via
-                        POST /email-queue/{id}/mark-sent or mark-failed.
-                        See EMAIL_QUEUE_INTEGRATION.md for the full contract.
+Schema overview (4 core tables, per spec)
+──────────────────────────────────────────
+users              — one row per registered person. Includes password_hash
+                      (temporary — Firebase will eventually own auth).
+devices            — one row per physical device. No owner column here —
+                      ownership lives in user_devices.
+user_devices       — relation table: which user owns which device.
+emergency_contacts — up to 3 per user, keyed by user_id, email-first.
+
+Plus supporting tables:
+user_preferences   — notification toggles + quiet hours, one row per user
+incidents          — one row per emergency event
+email_queue        — outbound email jobs (Phase 4 emergency alerts); a
+                      Google Apps Script (owned and written by the project
+                      author, not this codebase) polls GET
+                      /email-queue/pending and sends each one via
+                      GmailApp.sendEmail(), then reports back via
+                      POST /email-queue/{id}/mark-sent or mark-failed.
+                      See EMAIL_QUEUE_INTEGRATION.md for the full contract.
 
 Registration OTP
 ─────────────────
@@ -26,8 +29,7 @@ Apps Script web app (its own Sheet, its own regId, its own OTP round-trip
 — see OTP_Registration_Backend.gs). This codebase is not involved in that
 exchange at all. The frontend only calls create_user() (via POST
 /user/register, see user_routes.py) AFTER the Apps Script's action=verify
-has already succeeded — this function's job is purely to create the
-ResQNet domain record (user_id, hashed password) once that proof exists.
+has already succeeded.
 
 Login
 ─────
@@ -36,13 +38,9 @@ replace this). It deliberately does NOT use OTP; OTP is registration-only.
 
 ID generation
 ─────────────
-user_id   = "<Name>_<DOB>"           e.g. "Aksh_Kumar_19042005"
-            spaces in name -> underscores, DOB formatted as DDMMYYYY
-device_id = "<user_id>_<5-digit>"    e.g. "Aksh_Kumar_19042005_48213"
-
-This file deliberately mirrors the patterns already established in db.py
-(asyncpg pool, identifier safety, optional-by-default via DATABASE_URL) so
-the two modules feel like one system rather than two different styles.
+user_id   = "<firstname>_<lastname>_<phonenumber>"   e.g. "aksh_kumar_9876543210"
+            lowercased, spaces -> underscores, phone digits only (no +/spaces/dashes)
+device_id = "<user_id>_<5-digit>"    e.g. "aksh_kumar_9876543210_48213"
 """
 
 import hashlib
@@ -65,41 +63,36 @@ from app.db import _pool, db_enabled  # reuse the same connection pool
 # ID generation
 # ---------------------------------------------------------------------------
 
-_NAME_CLEAN_RE = re.compile(r"[^a-zA-Z]+")
+def _clean_phone(phone: str) -> str:
+    """Strips everything except digits — used only for building user_id."""
+    return re.sub(r"\D", "", phone or "")
 
 
-
-def _clean_name_part(name: str) -> str:
+def generate_user_id(name: str, phone: str) -> str:
     """
-    Turns a free-text name into a safe identifier component.
-    "Aksh Kumar" -> "Aksh_Kumar"
-    Strips anything that isn't a letter or space, then replaces spaces
-    with underscores. Multiple consecutive spaces collapse to one underscore.
-    """
-    # Keep letters and spaces only, then convert runs of whitespace to "_"
-    letters_and_spaces = re.sub(r"[^a-zA-Z\s]", "", name).strip()
-    parts = letters_and_spaces.split()
-    return "_".join(parts)
+    user_id = <firstname>_<lastname>_<phonenumber>, all lowercase.
+    e.g. generate_user_id("Aksh Kumar", "+91 98765-43210")
+         -> "aksh_kumar_919876543210"
 
-
-def generate_user_id(name: str, dob: date) -> str:
+    Only the first two whitespace-separated tokens of `name` are used
+    (firstname, lastname) — a middle name or suffix is dropped from the ID
+    but still stored in full in the `name` column.
     """
-    user_id = <Name with spaces->underscores>_<DOB as DDMMYYYY>
-    e.g. generate_user_id("Aksh Kumar", date(2005, 4, 19))
-         -> "Aksh_Kumar_19042005"
-    """
-    name_part = _clean_name_part(name)
-    dob_part = dob.strftime("%d%m%Y")
-    return f"{name_part}_{dob_part}"
+    letters_only = re.sub(r"[^a-zA-Z\s]", "", name or "").strip()
+    parts = letters_only.split()
+    firstname = parts[0].lower() if len(parts) >= 1 else "user"
+    lastname = parts[1].lower() if len(parts) >= 2 else ""
+    phone_part = _clean_phone(phone)
+    name_part = f"{firstname}_{lastname}" if lastname else firstname
+    return f"{name_part}_{phone_part}"
 
 
 def generate_device_id(user_id: str) -> str:
     """
     device_id = <user_id>_<random 5-digit number, zero-padded>
-    e.g. "Aksh_Kumar_19042005_04821"
     Caller is responsible for retrying if this collides (extremely unlikely
     at small scale, but device_id has a UNIQUE constraint so a collision
-    will raise — see register_device()).
+    will raise — see register_user_device()).
     """
     suffix = "".join(random.choices(string.digits, k=5))
     return f"{user_id}_{suffix}"
@@ -112,11 +105,6 @@ def generate_incident_id(device_id: str, trigger_ts: int) -> str:
 
 # ---------------------------------------------------------------------------
 # Password hashing — temporary stopgap until Firebase owns login.
-#
-# PBKDF2-HMAC-SHA256 with a random per-user salt, stdlib only (no bcrypt/
-# argon2 dependency to add for what's explicitly a throwaway system).
-# Stored format: "<salt_hex>$<iterations>$<hash_hex>" so the iteration
-# count can change later without breaking verification of older hashes.
 # ---------------------------------------------------------------------------
 
 _PBKDF2_ITERATIONS = 200_000
@@ -135,12 +123,12 @@ def verify_password(password: str, stored_hash: str) -> bool:
         salt, iterations, digest = stored_hash.split("$")
         iterations = int(iterations)
     except (ValueError, AttributeError):
-        return False   # malformed hash — never crash on a bad stored value
+        return False
 
     candidate = hashlib.pbkdf2_hmac(
         "sha256", password.encode("utf-8"), bytes.fromhex(salt), iterations
     ).hex()
-    return hmac.compare_digest(candidate, digest)   # constant-time compare
+    return hmac.compare_digest(candidate, digest)
 
 
 # ---------------------------------------------------------------------------
@@ -150,10 +138,9 @@ def verify_password(password: str, stored_hash: str) -> bool:
 async def init_user_tables():
     """
     Call once at app startup, after db.init_db() has created the pool.
-    Safe to call even if Postgres logging is disabled — does nothing in
-    that case, matching the pattern in db.py.
+    Safe to call even if Postgres logging is disabled.
     """
-    from app import db as dbmod   # local import avoids circular import at module load time
+    from app import db as dbmod
 
     if not db_enabled():
         return
@@ -167,36 +154,48 @@ async def init_user_tables():
                 dob             DATE NOT NULL,
                 phone           TEXT NOT NULL UNIQUE,
                 email           TEXT NOT NULL UNIQUE,
-                password_hash   TEXT NOT NULL,   -- temporary, until Firebase owns auth
-                verified        BOOLEAN NOT NULL DEFAULT FALSE,  -- proven via Apps Script OTP
+                password_hash   TEXT NOT NULL,
+                verified        BOOLEAN NOT NULL DEFAULT FALSE,
                 created_at      BIGINT NOT NULL
             )
         """)
 
+        # Devices — no owner column here. Ownership lives in user_devices.
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS devices (
+                device_id       TEXT PRIMARY KEY,
+                friendly_name   TEXT NOT NULL,
+                battery         INTEGER,
+                last_seen       BIGINT,
+                status          TEXT NOT NULL DEFAULT 'offline',
+                created_at      BIGINT NOT NULL
+            )
+        """)
+
+        # Relation table: which user owns which device.
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_devices (
+                id              BIGSERIAL PRIMARY KEY,
+                user_id         TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+                device_id       TEXT NOT NULL UNIQUE REFERENCES devices(device_id) ON DELETE CASCADE,
+                added_at        BIGINT NOT NULL
+            )
+        """)
+
+        # Emergency contacts — email-first (phone optional). Up to 3 per
+        # user, each with a unique priority (1 = notified first).
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS emergency_contacts (
                 id              BIGSERIAL PRIMARY KEY,
                 user_id         TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
                 name            TEXT NOT NULL,
-                phone           TEXT NOT NULL,
-                email           TEXT,
-                priority        INTEGER NOT NULL,         -- 1 = first notified, 2, 3
-                notify_sms      BOOLEAN NOT NULL DEFAULT TRUE,
-                notify_whatsapp BOOLEAN NOT NULL DEFAULT TRUE,
+                email           TEXT NOT NULL,
+                phone           TEXT,
+                priority        INTEGER NOT NULL,
                 notify_email    BOOLEAN NOT NULL DEFAULT TRUE,
+                notify_sms      BOOLEAN NOT NULL DEFAULT FALSE,
+                notify_whatsapp BOOLEAN NOT NULL DEFAULT FALSE,
                 UNIQUE (user_id, priority)
-            )
-        """)
-
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS devices (
-                device_id       TEXT PRIMARY KEY,
-                user_id         TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
-                friendly_name   TEXT NOT NULL,
-                battery         INTEGER,
-                last_seen       BIGINT,
-                status          TEXT NOT NULL DEFAULT 'offline',  -- online / offline / emergency
-                created_at      BIGINT NOT NULL
             )
         """)
 
@@ -207,8 +206,8 @@ async def init_user_tables():
                 notify_on_escalation BOOLEAN NOT NULL DEFAULT TRUE,
                 notify_on_low_battery BOOLEAN NOT NULL DEFAULT TRUE,
                 quiet_hours_enabled BOOLEAN NOT NULL DEFAULT FALSE,
-                quiet_hours_start   TEXT,    -- "22:00" 24h format, local to user
-                quiet_hours_end     TEXT,    -- "07:00"
+                quiet_hours_start   TEXT,
+                quiet_hours_end     TEXT,
                 language            TEXT NOT NULL DEFAULT 'en'
             )
         """)
@@ -218,27 +217,23 @@ async def init_user_tables():
                 incident_id     TEXT PRIMARY KEY,
                 device_id       TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
                 user_id         TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
-                em_id           TEXT,        -- matches db.py's emergency table em_id
+                em_id           TEXT,
                 started_at      BIGINT NOT NULL,
                 ended_at        BIGINT,
-                status          TEXT NOT NULL DEFAULT 'active',  -- active / resolved
-                responder_token TEXT,        -- Phase 5: token embedded in responder link
-                notified_at     BIGINT        -- when SMS/WhatsApp/Email were dispatched
+                status          TEXT NOT NULL DEFAULT 'active',
+                responder_token TEXT,
+                notified_at     BIGINT
             )
         """)
 
-        # ── Outbound email job queue — polled by an external Google Apps
-        #    Script (owned by the project author) which sends the actual
-        #    email via GmailApp and reports back via mark-sent/mark-failed.
-        #    See EMAIL_QUEUE_INTEGRATION.md for the exact HTTP contract.
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS email_queue (
                 id              BIGSERIAL PRIMARY KEY,
                 to_email        TEXT NOT NULL,
                 to_name         TEXT,
-                template_type   TEXT NOT NULL,     -- 'email_otp' | 'emergency_alert' (Phase 4+)
-                payload         JSONB NOT NULL,     -- template-specific fields, see integration doc
-                status          TEXT NOT NULL DEFAULT 'pending',  -- pending / sent / failed
+                template_type   TEXT NOT NULL,
+                payload         JSONB NOT NULL,
+                status          TEXT NOT NULL DEFAULT 'pending',
                 created_at      BIGINT NOT NULL,
                 sent_at         BIGINT,
                 error           TEXT
@@ -249,35 +244,18 @@ async def init_user_tables():
             ON email_queue (status, created_at ASC)
         """)
 
-    print("  User tables : ENABLED  (users, contacts, devices, preferences, "
-          "incidents, email_queue)")
+    print("  User tables : ENABLED  (users, devices, user_devices, "
+          "emergency_contacts, preferences, incidents, email_queue)")
 
 
 # ---------------------------------------------------------------------------
-# Email job queue — generic enqueue helper + Apps Script polling endpoints
-#
-# Any part of this codebase that needs to send an email (registration OTP
-# now, emergency alerts in Phase 4) calls enqueue_email(). The row sits in
-# `email_queue` with status='pending' until an external Google Apps Script
-# (written and owned by the project author) polls GET /email-queue/pending,
-# sends it via GmailApp.sendEmail(), and reports back via
-# POST /email-queue/{id}/mark-sent or mark-failed.
-#
-# This backend never talks to Google directly — no service account, no
-# Sheets API credentials, no SMTP config. The Apps Script is the only thing
-# that knows how to send mail; this table is just its work queue.
+# Email job queue
 # ---------------------------------------------------------------------------
 
 async def enqueue_email(to_email: str, to_name: Optional[str],
                          template_type: str, payload: dict) -> int:
-    """
-    Inserts a pending row into email_queue. Returns the new row's id.
-    payload is stored as JSONB — pass a plain dict, it's serialised here.
-    """
     from app import db as dbmod
     if not db_enabled():
-        # Postgres logging disabled entirely — email queue is inert too.
-        # Fail loudly rather than silently pretending the email was queued.
         raise RuntimeError(
             "Postgres not configured (DATABASE_URL unset) — cannot queue email."
         )
@@ -298,7 +276,6 @@ async def enqueue_email(to_email: str, to_name: Optional[str],
 
 
 async def list_pending_emails(limit: int = 50) -> list[dict]:
-    """Called by GET /email-queue/pending (email_queue_routes.py)."""
     from app import db as dbmod
     if not db_enabled():
         return []
@@ -318,16 +295,12 @@ async def list_pending_emails(limit: int = 50) -> list[dict]:
         out = []
         for r in rows:
             d = dict(r)
-            # asyncpg returns JSONB as a str — decode it for the API response
-            # so the Apps Script receives a real JSON object, not a JSON string.
             d["payload"] = json.loads(d["payload"]) if isinstance(d["payload"], str) else d["payload"]
             out.append(d)
         return out
 
 
 async def mark_email_sent(email_id: int) -> bool:
-    """Called by POST /email-queue/{id}/mark-sent. Returns False if the id
-    doesn't exist (caller should 404)."""
     from app import db as dbmod
     pool = dbmod._pool
     now = int(datetime.utcnow().timestamp())
@@ -336,11 +309,10 @@ async def mark_email_sent(email_id: int) -> bool:
             "UPDATE email_queue SET status = 'sent', sent_at = $2 WHERE id = $1",
             email_id, now,
         )
-        return result.endswith("1")   # "UPDATE 1" vs "UPDATE 0"
+        return result.endswith("1")
 
 
 async def mark_email_failed(email_id: int, error: str) -> bool:
-    """Called by POST /email-queue/{id}/mark-failed."""
     from app import db as dbmod
     pool = dbmod._pool
     async with pool.acquire() as conn:
@@ -353,25 +325,19 @@ async def mark_email_failed(email_id: int, error: str) -> bool:
 
 # ---------------------------------------------------------------------------
 # Users
-#
-# create_user() is called from POST /user/register — but only AFTER the
-# external Apps Script has already confirmed the email via its own OTP
-# round-trip. That means by the time this runs, email ownership is already
-# proven, so verified=True is set immediately rather than in two steps.
 # ---------------------------------------------------------------------------
 
 async def create_user(name: str, dob: date, phone: str, email: str, password: str) -> dict:
     """
     Creates a user row with verified=True immediately — the Apps Script
     already proved email ownership via OTP before this function is ever
-    called, so there's no separate "pending" state to track here.
-    Raises asyncpg.UniqueViolationError if phone, email, or the derived
-    user_id already exist.
+    called. Raises asyncpg.UniqueViolationError if phone, email, or the
+    derived user_id already exist.
     """
     from app import db as dbmod
     pool = dbmod._pool
 
-    user_id = generate_user_id(name, dob)
+    user_id = generate_user_id(name, phone)
     now = int(datetime.utcnow().timestamp())
     pw_hash = hash_password(password)
 
@@ -383,7 +349,6 @@ async def create_user(name: str, dob: date, phone: str, email: str, password: st
             """,
             user_id, name, dob, phone, email, pw_hash, now,
         )
-        # Seed default preferences row at the same time
         await conn.execute(
             """
             INSERT INTO user_preferences (user_id) VALUES ($1)
@@ -399,9 +364,7 @@ async def mark_verified(user_id: str) -> None:
     from app import db as dbmod
     pool = dbmod._pool
     async with pool.acquire() as conn:
-        await conn.execute(
-            "UPDATE users SET verified = TRUE WHERE user_id = $1", user_id
-        )
+        await conn.execute("UPDATE users SET verified = TRUE WHERE user_id = $1", user_id)
 
 
 async def get_user(user_id: str) -> Optional[dict]:
@@ -429,13 +392,6 @@ async def get_user_by_email(email: str) -> Optional[dict]:
 
 
 async def verify_login(email: str, password: str) -> Optional[dict]:
-    """
-    Password-based login check — temporary stopgap until Firebase.
-    Returns the user dict on success, None on any failure (wrong email,
-    wrong password, or unverified account). Deliberately vague about
-    *which* of these failed in the return value — the route layer decides
-    how much detail to expose to the client.
-    """
     user = await get_user_by_email(email)
     if not user:
         return None
@@ -447,20 +403,17 @@ async def verify_login(email: str, password: str) -> Optional[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Emergency contacts (max 3 per user, priority-ordered)
+# Emergency contacts (max 3 per user, priority-ordered, email-first)
 # ---------------------------------------------------------------------------
 
 MAX_CONTACTS_PER_USER = 3
 
 
 async def add_emergency_contact(
-    user_id: str, name: str, phone: str, email: Optional[str],
-    priority: int, notify_sms: bool, notify_whatsapp: bool, notify_email: bool
+    user_id: str, name: str, email: str, phone: Optional[str],
+    priority: int, notify_email: bool = True,
+    notify_sms: bool = False, notify_whatsapp: bool = False,
 ) -> dict:
-    """
-    Raises ValueError if the user already has MAX_CONTACTS_PER_USER contacts,
-    or if `priority` is already taken (1, 2, 3 — each must be unique per user).
-    """
     from app import db as dbmod
     pool = dbmod._pool
 
@@ -476,13 +429,13 @@ async def add_emergency_contact(
         row = await conn.fetchrow(
             """
             INSERT INTO emergency_contacts
-                (user_id, name, phone, email, priority, notify_sms, notify_whatsapp, notify_email)
+                (user_id, name, email, phone, priority, notify_email, notify_sms, notify_whatsapp)
             VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-            RETURNING id, user_id, name, phone, email, priority,
-                      notify_sms, notify_whatsapp, notify_email
+            RETURNING id, user_id, name, email, phone, priority,
+                      notify_email, notify_sms, notify_whatsapp
             """,
-            user_id, name, phone, email, priority,
-            notify_sms, notify_whatsapp, notify_email,
+            user_id, name, email, phone, priority,
+            notify_email, notify_sms, notify_whatsapp,
         )
         return dict(row)
 
@@ -493,8 +446,8 @@ async def list_emergency_contacts(user_id: str) -> list[dict]:
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """
-            SELECT id, user_id, name, phone, email, priority,
-                   notify_sms, notify_whatsapp, notify_email
+            SELECT id, user_id, name, email, phone, priority,
+                   notify_email, notify_sms, notify_whatsapp
             FROM emergency_contacts
             WHERE user_id = $1
             ORDER BY priority ASC
@@ -505,11 +458,6 @@ async def list_emergency_contacts(user_id: str) -> list[dict]:
 
 
 async def update_emergency_contact(contact_id: int, **fields) -> None:
-    """
-    Generic partial update. `fields` keys must be column names already
-    validated by the caller (the FastAPI route uses a Pydantic model so
-    this is never raw user input reaching here unchecked).
-    """
     if not fields:
         return
     from app import db as dbmod
@@ -530,15 +478,14 @@ async def remove_emergency_contact(contact_id: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Devices
+# Devices (+ user_devices relation table)
 # ---------------------------------------------------------------------------
 
 async def register_user_device(user_id: str, friendly_name: str) -> dict:
     """
-    Generates a device_id, creates the devices row, AND provisions that
-    device's Postgres circular-buffer log table by reusing db.py's existing
-    ensure_device_table() — so a device registered here is immediately ready
-    to receive /device/update calls with full logging.
+    Generates a device_id, inserts into `devices`, links it to the user in
+    `user_devices`, AND provisions that device's Postgres circular-buffer
+    log table by reusing db.py's existing ensure_device_table().
     """
     from app import db as dbmod
 
@@ -547,15 +494,22 @@ async def register_user_device(user_id: str, friendly_name: str) -> dict:
 
     pool = dbmod._pool
     async with pool.acquire() as conn:
-        await conn.execute(
-            """
-            INSERT INTO devices (device_id, user_id, friendly_name, status, created_at)
-            VALUES ($1, $2, $3, 'offline', $4)
-            """,
-            device_id, user_id, friendly_name, now,
-        )
+        async with conn.transaction():
+            await conn.execute(
+                """
+                INSERT INTO devices (device_id, friendly_name, status, created_at)
+                VALUES ($1, $2, 'offline', $3)
+                """,
+                device_id, friendly_name, now,
+            )
+            await conn.execute(
+                """
+                INSERT INTO user_devices (user_id, device_id, added_at)
+                VALUES ($1, $2, $3)
+                """,
+                user_id, device_id, now,
+            )
 
-    # Reuse the existing per-device log table provisioning from db.py
     await dbmod.ensure_device_table(device_id)
 
     return {"device_id": device_id, "user_id": user_id, "friendly_name": friendly_name}
@@ -566,19 +520,36 @@ async def list_user_devices(user_id: str) -> list[dict]:
     pool = dbmod._pool
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT * FROM devices WHERE user_id = $1 ORDER BY created_at ASC", user_id
+            """
+            SELECT d.device_id, d.friendly_name, d.battery, d.last_seen,
+                   d.status, d.created_at
+            FROM devices d
+            JOIN user_devices ud ON ud.device_id = d.device_id
+            WHERE ud.user_id = $1
+            ORDER BY d.created_at ASC
+            """,
+            user_id,
         )
         return [dict(r) for r in rows]
+
+
+async def get_owner_user_id(device_id: str) -> Optional[str]:
+    """Looks up which user owns a device, via the user_devices relation
+    table. Used by main.py when an emergency starts on a device, to find
+    who to notify (responder link + emergency contacts)."""
+    from app import db as dbmod
+    pool = dbmod._pool
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
+            "SELECT user_id FROM user_devices WHERE device_id = $1", device_id
+        )
 
 
 async def update_device_status(device_id: str, battery: Optional[int] = None,
                                 last_seen: Optional[int] = None,
                                 status: Optional[str] = None) -> None:
-    """
-    Called from the existing /device/update flow (main.py) to keep the
-    devices table's battery/last_seen/status in sync with live broadcasts,
-    so the User Dashboard's device list reflects real-time state.
-    """
+    """Called from /device/update (main.py) to keep the devices table's
+    battery/last_seen/status in sync with live broadcasts."""
     from app import db as dbmod
     pool = dbmod._pool
 
@@ -606,6 +577,7 @@ async def remove_device(device_id: str) -> None:
     from app import db as dbmod
     pool = dbmod._pool
     async with pool.acquire() as conn:
+        # user_devices row cascades on delete via FK
         await conn.execute("DELETE FROM devices WHERE device_id = $1", device_id)
 
 
@@ -637,10 +609,11 @@ async def update_preferences(user_id: str, **fields) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Incidents (table + helpers now; full dispatch logic comes in Phase 4)
+# Incidents
 # ---------------------------------------------------------------------------
 
-async def create_incident(device_id: str, user_id: str, em_id: str, started_at: int) -> str:
+async def create_incident(device_id: str, user_id: str, em_id: str, started_at: int,
+                           responder_token: Optional[str] = None) -> str:
     from app import db as dbmod
     pool = dbmod._pool
 
@@ -648,11 +621,12 @@ async def create_incident(device_id: str, user_id: str, em_id: str, started_at: 
     async with pool.acquire() as conn:
         await conn.execute(
             """
-            INSERT INTO incidents (incident_id, device_id, user_id, em_id, started_at, status)
-            VALUES ($1, $2, $3, $4, $5, 'active')
+            INSERT INTO incidents (incident_id, device_id, user_id, em_id, started_at, status, responder_token, notified_at)
+            VALUES ($1, $2, $3, $4, $5, 'active', $6, $7)
             ON CONFLICT (incident_id) DO NOTHING
             """,
             incident_id, device_id, user_id, em_id, started_at,
+            responder_token, int(datetime.utcnow().timestamp()) if responder_token else None,
         )
     return incident_id
 
@@ -665,6 +639,35 @@ async def close_incident(incident_id: str, ended_at: int) -> None:
             "UPDATE incidents SET status = 'resolved', ended_at = $2 WHERE incident_id = $1",
             incident_id, ended_at,
         )
+
+
+async def close_incident_by_token(responder_token: str, ended_at: int) -> Optional[str]:
+    """Called when the responder dashboard resolves an incident via the
+    session-token Apps Script. Returns the incident_id closed, or None."""
+    from app import db as dbmod
+    pool = dbmod._pool
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            UPDATE incidents SET status = 'resolved', ended_at = $2
+            WHERE responder_token = $1 AND status != 'resolved'
+            RETURNING incident_id
+            """,
+            responder_token, ended_at,
+        )
+        return row["incident_id"] if row else None
+
+
+async def get_active_incident_for_device(device_id: str) -> Optional[dict]:
+    from app import db as dbmod
+    pool = dbmod._pool
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM incidents WHERE device_id = $1 AND status = 'active' "
+            "ORDER BY started_at DESC LIMIT 1",
+            device_id,
+        )
+        return dict(row) if row else None
 
 
 async def list_user_incidents(user_id: str) -> list[dict]:

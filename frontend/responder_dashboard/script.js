@@ -274,6 +274,20 @@ function applyPayload(data) {
     document.body.classList.add("resolved");
     updateBannerResolved();
     armSessionExpiry();   // starts the 30-minute countdown to session close
+
+    // If we got here via a magic link (?uid=&token=), the device resetting
+    // is what "resolved" means — kill the link on both sides so it can't
+    // be reused: the Apps Script Sheet row (magic link itself) and the
+    // Postgres incidents row (User Dashboard incident history).
+    if (activeSessionToken && activeSessionUserId) {
+      resolveIncident(activeSessionUserId, activeSessionToken, "auto: device reset")
+        .catch((err) => console.warn("Apps Script resolve failed:", err));
+      fetch(`${BACKEND}/user/incidents/resolve-by-token`, {
+        method: "POST",
+        headers: _authHeaders(),
+        body: JSON.stringify({ token: activeSessionToken }),
+      }).catch((err) => console.warn("Backend resolve-by-token failed:", err));
+    }
   }
 
   // ── Emergency start ──
@@ -630,18 +644,39 @@ async function fetchHistory(id) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// URL param auto-load  (?device=DEV_123 or ?incident=INC-xxx&token=xxx)
+// URL param auto-load
+//   ?uid=<userId>&token=<sessionToken>  -> emergency magic link (from the
+//     responder/contact alert email). Validated against the session-token
+//     Apps Script (responder-dashboard-frontend.js), which returns the
+//     deviceId to watch — then handed straight into loadDevice() so the
+//     rest of this file (live map, WS feed, timeline) works unmodified.
+//   ?device=DEV_123 -> direct device monitoring (manual entry / demo).
 // ─────────────────────────────────────────────────────────────────────────────
-(function checkUrlParams() {
+let activeSessionToken = null;   // set once a magic link has been validated
+let activeSessionUserId = null;
+
+(async function checkUrlParams() {
   const params = new URLSearchParams(window.location.search);
 
-  // Future: ?incident=INC-xxx&token=xxx  [STUB — needs backend incident endpoint]
-  const incident = params.get("incident");
-  const token    = params.get("token");
-  if (incident && token) {
-    // [STUB] fetch incident details from /incident/{id}?token={token}
-    // and extract device_id, then call loadDevice(device_id)
-    showToast("Incident links require backend support (coming soon)");
+  const uid   = params.get("uid");
+  const token = params.get("token");
+  if (uid && token) {
+    showToast("Validating incident link…");
+    try {
+      const result = await initIncidentPage(); // defined in responder-dashboard-frontend.js
+      if (result && result.success && result.incident) {
+        activeSessionToken  = token;
+        activeSessionUserId = uid;
+        loadDevice(result.incident.deviceId);
+        addTimelineEntry(`Incident link validated for ${result.incident.name}`, "green");
+      }
+      // On failure, initIncidentPage() already rendered its own error
+      // state into #incident-root (see responder-dashboard-frontend.js) —
+      // nothing further to do here.
+    } catch (err) {
+      showToast("Could not validate incident link");
+    }
+    return;
   }
 
   // Current: ?device=DEV_xxx for direct device monitoring

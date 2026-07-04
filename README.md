@@ -1,6 +1,6 @@
 # ResQNet — Response & Rescue Network
 
-> A context-aware, device-independent emergency response prototype with real-time situational awareness, intelligent escalation, integrated dual simulators, and a live monitoring dashboard.
+> A context-aware, device-independent emergency response system: real-time situational awareness, intelligent escalation, a Postgres-backed user/device/contacts system, and a responder dashboard that's paged in via magic link the instant an emergency starts.
 
 ---
 
@@ -8,18 +8,20 @@
 
 1. [What It Does](#what-it-does)
 2. [Architecture](#architecture)
-3. [Features](#features)
-4. [Tech Stack](#tech-stack)
-5. [Project Structure](#project-structure)
-6. [How to Run](#how-to-run)
-7. [In-Browser Simulator](#in-browser-simulator)
-8. [Python Simulator (Optional)](#python-simulator-optional)
-9. [API Reference](#api-reference)
-10. [Security](#security)
-11. [Design Principles](#design-principles)
-12. [Current Status](#current-status)
-13. [Planned Improvements](#planned-improvements)
-14. [Author](#author)
+3. [Project Structure](#project-structure)
+4. [How to Run](#how-to-run)
+5. [The Four Surfaces](#the-four-surfaces)
+6. [Data Model](#data-model)
+7. [Emergency Flow, End to End](#emergency-flow-end-to-end)
+8. [API Reference](#api-reference)
+9. [Google Apps Scripts](#google-apps-scripts)
+10. [Environment Variables](#environment-variables)
+11. [Security](#security)
+12. [Simulator](#simulator)
+13. [Design Principles](#design-principles)
+14. [Current Status](#current-status)
+15. [Known Gaps / Next Steps](#known-gaps--next-steps)
+16. [Author](#author)
 
 ---
 
@@ -27,112 +29,63 @@
 
 Most SOS systems assume you have calm, unobstructed access to your phone. ResQNet doesn't.
 
-It is designed around a single premise: **the device triggers the alert, not the app**. Once panic is triggered, the system latches into emergency state, classifies movement context in real time, escalates automatically if danger persists, and streams everything live to a monitoring dashboard — all without the user needing to do anything else.
+It's built around one premise: **the device triggers the alert, not the app.** Once an emergency is triggered, the system latches into emergency state, classifies movement context in real time, escalates automatically if danger persists, notifies the device owner's emergency contacts, and hands responders a live-tracking link — no login, no delay.
 
 ---
 
 ## Architecture
 
 ```
-[ Browser Simulator ]      [ Python Simulator ]
-  (built into dashboard)     (simulator.py, optional)
-        │                           │
-        │   POST /device/update (1 Hz, both)
-        ▼                           ▼
-            [ FastAPI Backend ]
-                    │
-                    │  WebSocket broadcast
-                    ▼
-            [ Live Dashboard ]
-   (renders BOTH simulators on one map, side by side)
+[ Trial Dashboard ]         [ User Dashboard ]           [ Responder Dashboard ]
+  (in-browser sim,            (register/login, devices,     (opened via magic link
+   dev/demo tool)              contacts, incidents)          from an emergency email)
+        │                            │                              ▲
+        │  POST /device/update       │  POST/GET /user/*            │ ?uid=&token=
+        ▼                            ▼                              │
+              [ FastAPI Backend  (Render) ]  ───────────────────────┘
+                    │        │                validates via
+                    │        │
+    WebSocket        │        └── on emergency start ──► [ Emergency Session
+    broadcast         │                                     Token Apps Script ]
+        │              │                                          │
+        ▼              ▼                                          ├─► emails responders
+[ live map on any   [ Neon Postgres ]                              └─► emails this user's
+  connected           users / devices /                                emergency contacts
+  dashboard ]         user_devices /
+                       emergency_contacts /
+                       incidents / email_queue
+
+[ OTP Registration Apps Script ]  ◄── called directly by the User Dashboard
+  (its own Sheet, its own OTP        during signup, BEFORE the backend's
+   round-trip — backend not          /user/register is ever called
+   involved in this exchange)
 ```
 
-Both simulators can run **at the same time**, driving completely independent devices that appear together on the same map and in the same sidebar — there's no conflict between them.
-
-### Core data flow
+### Core data flow (per device tick)
 
 ```
-Panic Trigger
-    → Emergency state latched (cannot auto-cancel)
-    → Context classified  (stationary / walking / running / vehicle)
-    → Speed anomaly checked  (Δspeed > 5 m/s = elevated)
-    → Risk calculated  (normal / elevated / critical)
-    → Escalation checked  (30s → escalated, 90s → critical)
-    → Broadcast to all connected WebSocket clients
-    → Alert cooldown prevents spam  (30s window)
+Device sends /device/update (1 Hz)
+    → context classified   (stationary / walking / running / vehicle)
+    → speed anomaly checked   (Δspeed > 5 m/s = elevated)
+    → risk calculated   (normal / elevated / critical)
+    → escalation checked   (30s → escalated, 90s → critical)
+    → Postgres circular-buffer log updated (500-row cap per device)
+    → broadcast to all connected WebSocket clients
+
+If emergency just started this tick:
+    → emergency Postgres log table opened (pre-seeded with 5 min of history)
+    → owning user looked up via user_devices
+    → Emergency Session Token Apps Script called (action=trigger)
+         → emails fixed responder list + this user's emergency contacts
+           a magic link: responder_dashboard?uid=&token=
+    → incidents row created, storing the returned token
+
+If the device later resets:
+    → emergency log closed, incidents row marked resolved
+    → responder dashboard (if a magic-link session is open) auto-calls
+      the Apps Script's action=resolve AND the backend's
+      /user/incidents/resolve-by-token, killing the link on both sides
 ```
-
----
-
-## Features
-
-### Emergency Trigger & Latch
-- Panic button activates emergency mode instantly
-- Emergency state is **latched** — it cannot be cancelled automatically or by a coerced tap
-- Reset requires an explicit `reset: true` signal from the device
-- Reset flag is included in every broadcast so all dashboards react simultaneously
-
-### Dual Simulators (run independently or together)
-- **In-browser simulator** — built directly into the dashboard. Click "+ Add Device" to spawn any number of simulated devices, each with its own movement loop, right in the browser. No Python process needed.
-- **Python simulator** — `simulator.py` runs standalone in a terminal for interactive keypress control or scripted demos.
-- Both use the **same heading-based movement model**: realistic curves, gaussian speed noise, smooth lerp transitions, GPS jitter, and brief pauses (traffic lights, checking phone).
-- Devices from either simulator appear together on the same dashboard, identified automatically — the dashboard doesn't care which one created a device.
-
-### Context Classification
-Speed (m/s) is mapped to movement context each tick:
-
-| Context | Speed Range |
-|---|---|
-| Stationary | < 0.3 m/s |
-| Walking | 0.3 – 1.5 m/s |
-| Running | 1.5 – 3.5 m/s |
-| Vehicle | > 3.5 m/s |
-
-### Risk Assessment
-- `normal` — no emergency, no anomaly
-- `elevated` — sudden speed jump > 5 m/s (speed anomaly)
-- `critical` — emergency is active
-
-### Time-Based Escalation
-- After **30 seconds** of continuous emergency → `escalated`
-- After **90 seconds** → `critical`
-- All pending escalation levels are advanced in one pass (no silent skips if updates are infrequent)
-- Escalation state is fully cleared on reset
-
-### Alert System
-- Alerts fire when risk is `elevated` or `critical`
-- 30-second cooldown prevents repeat spam
-- Alert flag carried in every broadcast payload
-
-### Live Dashboard — Sidebar + Map Layout
-- **Left sidebar**, split top/bottom:
-  - **Top half — Device list**: every active device (from either simulator) as a card showing live speed, context, risk pill, battery %, and status dot. Each card has its own Panic / Reset / Mode / Turn controls.
-  - **Bottom half — Movement log**: switches automatically to show the log of whichever device is selected. Capped at 200 entries per device.
-- **Map fills the remaining screen** — never locked to one device. Auto-pans only when the *currently selected* device leaves the visible bounds, so you're always free to pan/zoom and inspect any device manually.
-- **Add Device modal** — name, preset city or custom lat/lng, starting mode.
-- Marker colour: 🟢 normal · 🟠 elevated · 🔴 emergency (with blink)
-- **Movement trail** shown only during active emergency, colour-coded by risk, cleared on reset
-- Battery bar with colour coding (green / amber / red)
-- WebSocket reconnection with exponential backoff (1s → 30s)
-- Connection status dot (🟢 live / 🟠 reconnecting / 🔴 disconnected)
-- Audio alert on emergency trigger and escalation
-- **Dark mode** toggle (CartoDB dark tiles + dark panel theme, default ON)
-- API key panel — only needed if backend auth is enabled (see [Security](#security))
-
----
-
-## Tech Stack
-
-| Layer | Technology |
-|---|---|
-| Backend | Python 3.11+, FastAPI 0.128, Uvicorn |
-| Real-time | WebSockets (native FastAPI) |
-| Validation | Pydantic v2 with Field constraints |
-| Auth | Optional API key (HTTP header + WS token), rate limiting via slowapi |
-| State | In-memory (deque-bounded history, prototype stage) |
-| Frontend | HTML5, external CSS, Vanilla JS, Leaflet.js |
-| Map tiles | CartoDB Dark (default), OpenStreetMap (light mode) |
-| Simulators | In-browser JS engine + standalone Python (`simulator.py`) — both heading-based |
 
 ---
 
@@ -140,31 +93,49 @@ Speed (m/s) is mapped to movement context each tick:
 
 ```
 resqnet/
-├── start.bat                 # Windows one-click startup
-├── start.sh                  # macOS/Linux one-click startup
-├── .gitignore
-├── LICENSE
+├── index.html                      # Landing page — links to all 3 dashboards + API docs
 ├── backend/
 │   ├── app/
-│   │   ├── __init__.py
-│   │   ├── main.py           # FastAPI app, routes, broadcast logic
-│   │   ├── auth.py           # Optional API key + WS token validation, rate limit handler
-│   │   ├── context.py        # Speed classification, risk, escalation
-│   │   ├── schemas.py        # Pydantic request models with field validation
-│   │   ├── storage.py        # In-memory state dicts, deque history, registered devices
-│   │   └── websocket.py      # ConnectionManager with dead-client cleanup
+│   │   ├── main.py                 # FastAPI app: device ingestion, WS broadcast, emergency trigger
+│   │   ├── user_routes.py          # /user/* — register/login/contacts/devices/preferences/incidents
+│   │   ├── user_db.py              # Postgres layer: users, devices, user_devices, emergency_contacts,
+│   │   │                           #   user_preferences, incidents, email_queue
+│   │   ├── email_queue_routes.py   # /email-queue/* — polled by a Phase-4 Apps Script (not live yet)
+│   │   ├── db.py                   # Per-device circular-buffer + emergency log tables
+│   │   ├── auth.py                 # Optional API key + WS token validation, rate limit handler
+│   │   ├── context.py              # Speed classification, risk, escalation
+│   │   ├── schemas.py              # Pydantic request models
+│   │   ├── storage.py              # In-memory live state (device_state, history, registered_devices)
+│   │   └── websocket.py            # ConnectionManager
 │   ├── requirements.txt
-│   └── .env.example          # Copy to .env to enable auth / configure CORS
-├── Trial_Dashboard/
-│   ├── index.html            # Sidebar + map layout, modal markup
-│   ├── style.css             # All dashboard styling (external file)
-│   └── script.js             # In-browser simulator engine, WS client, map, replay
-└── simulator/
-    ├── simulator.py          # Standalone interactive + demo Python simulator
-    └── send_updates.py       # Minimal one-shot update script
+│   ├── env.example                 # Copy to .env — documents every variable
+│   └── .env                        # (gitignored) local secrets
+├── apps_script/
+│   ├── OTP_Registration_Backend.gs      # Registration OTP — own Sheet, own crypto
+│   └── Emergency_Session_Backend.gs     # Responder magic links + emergency-contact alerts
+├── frontend/
+│   ├── user_dashboard/             # Register / login / devices / contacts / incidents
+│   │   ├── index.html
+│   │   ├── app.js                  # Talks to the FastAPI /user/* endpoints
+│   │   ├── otp-frontend.js         # Talks directly to the OTP Apps Script
+│   │   └── style.css
+│   └── responder_dashboard/        # Opened via emergency magic link
+│       ├── index.html
+│       ├── script.js               # Live map / WS feed / timeline (the "real" dashboard logic)
+│       ├── responder-dashboard-frontend.js  # Validates ?uid=&token= against the Apps Script
+│       └── style.css
+├── Trial_Dashboard/                 # Dev/demo tool — in-browser simulator + live map, unchanged
+│   ├── index.html
+│   ├── style.css
+│   └── script.js
+├── simulator/
+│   ├── simulator.py                 # Standalone interactive + demo Python simulator
+│   ├── seed_simulator_user.py       # Creates a real "Simulator" user + device via the API
+│   └── send_updates.py              # Minimal one-shot update script
+├── EMAIL_QUEUE_INTEGRATION.md       # HTTP contract for the Phase-4 email-sending Apps Script
+├── start.bat / start.sh
+└── LICENSE
 ```
-
-> Note: this project does **not** use Docker. `start.bat` / `start.sh` run everything directly with Python — no containers needed.
 
 ---
 
@@ -173,209 +144,193 @@ resqnet/
 ### Prerequisites
 - Python 3.11+
 - `pip install -r backend/requirements.txt`
+- A Neon Postgres database (free tier is fine) — required for the User Dashboard, Responder Dashboard, and email queue. The Trial Dashboard works without it.
+- Both Apps Scripts deployed as Web Apps (see [Google Apps Scripts](#google-apps-scripts))
+
+### Configure
+```bash
+cp backend/env.example backend/.env
+# then fill in DATABASE_URL, SESSION_TOKEN_WEBAPP_URL, and optionally API_KEY
+```
 
 ### One-command startup
-
 ```bash
-# Windows
-start.bat
-
-# macOS / Linux
-./start.sh
+start.bat        # Windows
+./start.sh       # macOS / Linux
 ```
+This starts the backend, serves the Trial Dashboard, and opens it in your browser. On startup, the backend also creates every Postgres table it needs (`users`, `devices`, `user_devices`, `emergency_contacts`, `user_preferences`, `incidents`, `email_queue`, plus the per-device log tables) if they don't already exist.
 
-This starts the backend, serves the dashboard, and opens it in your default browser automatically. The dashboard's own simulator is ready immediately — click **+ Add Device** to start simulating.
-
-### Optional flags
-
-```bash
-start.bat               # backend + dashboard only (recommended — use "+ Add Device" in browser)
-start.bat --with-sim    # ALSO launches the Python simulator (interactive) alongside the browser one
-start.bat --demo        # ALSO launches the Python simulator in scripted demo mode
-```
-(Same flags work with `./start.sh` on macOS/Linux.)
-
-### Manual startup (if you prefer separate terminals)
-
-**Backend:**
+### Manual startup
 ```bash
 cd backend
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
-> Binds to `0.0.0.0` (not `127.0.0.1`) so both `localhost` and `127.0.0.1` resolve correctly — important on Windows where `localhost` can resolve to the IPv6 loopback `::1`.
-
-**Dashboard:**
 ```bash
-cd Trial_Dashboard
-python -m http.server 5500
+cd Trial_Dashboard && python -m http.server 5500      # Trial Dashboard
+cd frontend/user_dashboard && python -m http.server 5501
+cd frontend/responder_dashboard && python -m http.server 5502
 ```
-Open `http://localhost:5500`
 
-**Python simulator (optional):**
+### Seed a demo account
 ```bash
-cd simulator
-python simulator.py
+python simulator/seed_simulator_user.py --url http://127.0.0.1:8000 --key <API_KEY>
+# prints a device_id — feed it straight into the simulator:
+python simulator/simulator.py --demo --id <device_id> --url http://127.0.0.1:8000/device/update --key <API_KEY>
 ```
+Log into the User Dashboard with `simulator@resqnet.demo` / `SimulatorDemo123!` to watch that account's device, incidents, and contacts update live.
 
 ---
 
-## In-Browser Simulator
+## The Four Surfaces
 
-No setup needed — it's part of the dashboard.
+### 1. Landing page (`index.html`)
+Links out to the Trial Dashboard, User Dashboard, Responder Dashboard, the GitHub repo, and the live API docs (`/docs`). No backend calls of its own.
 
-1. Click **+ Add Device** (top of the sidebar)
-2. Name it, pick a starting city (or enter custom lat/lng), choose a starting mode
-3. Click **Add Device** — it appears as a card and starts moving immediately
+### 2. Trial Dashboard
+The original dev/demo tool — an in-browser device simulator plus live map, entirely self-contained. Unchanged by the User/Responder Dashboard work; still the fastest way to see the core context/risk/escalation logic without touching Postgres or Apps Script at all.
 
-Each device card has:
+### 3. User Dashboard
+Where a real person manages their account:
+- **Register** — Full Name, DOB, Phone, Email, Password. The OTP round-trip happens against the OTP Apps Script *before* the backend is ever called; the backend's `/user/register` just creates the domain record once that's proven.
+- **Login** — email + password (temporary, pre-Firebase).
+- **Devices** — add a device (generates a `device_id`, provisions its log table), see battery/status/last-seen live.
+- **Emergency contacts** — up to 3, email-first, priority-ordered.
+- **Incidents** — history of past emergencies for this account.
+- **Voice Monitoring** — placeholder card, disabled. Reserves the UI slot for a future device-mic feature; does nothing yet.
 
-| Control | Action |
-|---|---|
-| 🚨 Panic | Toggle emergency state for this device |
-| ✅ Reset | Explicitly clear emergency + escalation state |
-| Mode dropdown | Switch between Walk / Still / Run / Vehicle |
-| ↩ Turn | Instantly randomise heading (simulate turning a corner) |
-| ✕ | Remove this device |
-
-Click anywhere on a card (not on a control) to **select** it — the movement log below switches to that device, and the map pans to it. You can add as many devices as you want; each runs its own independent 1Hz movement loop.
+### 4. Responder Dashboard
+Never logged into directly — it's opened via the link an emergency email contains (`?uid=&token=`). On load, it validates that link against the Emergency Session Token Apps Script, then drives the exact same live map / WebSocket feed / timeline UI the Trial Dashboard uses for manual device IDs. When the device resets, the link is killed automatically on both the Apps Script side and in Postgres.
 
 ---
 
-## Python Simulator (Optional)
+## Data Model
 
-Runs alongside the browser simulator — devices from both appear together on the same dashboard automatically (the dashboard auto-creates a card for any device it sees broadcast from the backend, regardless of source).
+Four core Postgres tables, plus supporting ones:
 
-```bash
-cd simulator
-python simulator.py                          # interactive
-python simulator.py --id DEVICE_02            # custom device ID
-python simulator.py --lat 19.076 --lng 72.877 # start in Mumbai
-python simulator.py --demo                    # scripted demo, no keypresses
-python simulator.py --key <your_api_key>      # if backend auth is enabled
-```
-
-### Interactive controls
-
-| Key | Action |
+| Table | Purpose |
 |---|---|
-| `p` | Trigger panic |
-| `r` | Reset panic |
-| `0` | Mode: stationary |
-| `1` | Mode: walking |
-| `2` | Mode: running |
-| `3` | Mode: vehicle |
-| `t` | Sharp turn |
-| `q` | Quit |
+| `users` | One row per person. `user_id` = `firstname_lastname_phonenumber` (e.g. `aksh_kumar_9876543210`). |
+| `devices` | One row per physical device. **No owner column** — ownership lives in `user_devices`. |
+| `user_devices` | Relation table: which user owns which device. |
+| `emergency_contacts` | Up to 3 per user, email-first, unique priority (1–3). |
+| `user_preferences` | Notification toggles + quiet hours, one row per user. |
+| `incidents` | One row per emergency event — links `device_id`, `user_id`, the responder token, and start/end times. |
+| `email_queue` | Outbound email jobs for Phase-4 features, polled by a separate (not-yet-built) Apps Script — see `EMAIL_QUEUE_INTEGRATION.md`. |
 
-### Demo mode timeline
+Plus, per device, `db.py` maintains its own circular-buffer log table (`device_<id>`, capped at 500 rows) and one emergency-log table per incident (`<device_id>_EM<timestamp>`, uncapped, permanent).
 
-```
-  0s   walking — normal state
- 10s   panic triggered
- 15s   mode switches to running
- 30s   backend fires "escalated" automatically
- 90s   backend fires "critical" automatically
-110s   reset sent — returns to normal
-120s   simulator exits
-```
+---
+
+## Emergency Flow, End to End
+
+1. Device (or simulator) sends `emergency: true` on `/device/update`.
+2. Backend opens an emergency log table in Postgres, looks up the owning user via `user_devices`.
+3. Backend calls the **Emergency Session Token Apps Script** (`action=trigger`) with the user's name, device ID, coordinates, and their emergency-contact email list.
+4. That script generates a 6-character token, emails the fixed responder list a full incident email, emails every emergency contact a shorter personal-alert email — **same link** for both — and returns the token.
+5. Backend stores that token on a new `incidents` row.
+6. Whoever opens the link lands on the Responder Dashboard, which validates `?uid=&token=` against the Apps Script, then loads the live map for that device.
+7. When the device sends `reset: true`, the responder page auto-resolves the session on both the Apps Script (kills the link) and the backend (`/user/incidents/resolve-by-token`, closes the Postgres row).
 
 ---
 
 ## API Reference
 
-### `POST /device/register`
-Register a device ID before it can send updates.
-```json
-{ "device_id": "SIM_DEVICE_01" }
-```
+### Device ingestion (Trial Dashboard + simulators + real devices)
+| Endpoint | Purpose |
+|---|---|
+| `POST /device/register` | Register a device ID before it can send updates |
+| `POST /device/update` | Position + state update (1 Hz) — triggers emergency notification logic |
+| `GET /device/{id}` | Latest state |
+| `GET /device/{id}/history` | Last 1,000 entries |
+| `GET /device/registered` | List all registered device IDs |
+| `WS /ws/live` | Live broadcast feed — `?token=<api_key>` if auth enabled |
 
-### `POST /device/update`
-Send a position + state update from a registered device.
+### User Dashboard (`/user/*`, all require `X-API-Key` if auth is enabled)
+| Endpoint | Purpose |
+|---|---|
+| `POST /user/register` | Create account — call only after the OTP Apps Script's `verify` succeeded |
+| `POST /user/login` | Email + password login |
+| `GET /user/{user_id}` | Full profile: user + contacts + devices + preferences |
+| `POST/GET /user/{user_id}/contacts` | Add / list emergency contacts |
+| `PATCH/DELETE /user/contacts/{id}` | Edit / remove a contact |
+| `POST /user/devices/register` | Register a device under a user |
+| `GET /user/{user_id}/devices` | List a user's devices |
+| `DELETE /user/devices/{device_id}` | Remove a device |
+| `GET/PATCH /user/{user_id}/preferences` | Notification preferences |
+| `GET /user/{user_id}/incidents` | Incident history |
+| `POST /user/incidents/resolve-by-token` | Called by the responder dashboard on auto-resolve — no API key, token is the credential |
 
-```json
-{
-  "device_id": "SIM_DEVICE_01",
-  "timestamp": 1700000000,
-  "latitude": 28.6139,
-  "longitude": 77.2090,
-  "speed": 1.2,
-  "battery": 85,
-  "emergency": false,
-  "reset": false
-}
-```
+### Email queue (`/email-queue/*`, Phase 4 — not live yet)
+See `EMAIL_QUEUE_INTEGRATION.md`.
 
-**Validation:** `latitude` −90 to 90 · `longitude` −180 to 180 · `speed` ≥ 0 · `battery` 0–100
+---
 
-**Response:** `{ "status": "broadcasted", "risk": "normal" }`
+## Google Apps Scripts
 
-### `GET /device/{device_id}`
-Returns latest state for a device.
+Both live in `apps_script/` as version-controlled reference source — the actual deployment happens in the Apps Script editor, and the `/exec` URL goes into `backend/.env`.
 
-### `GET /device/{device_id}/history`
-Returns position + event history (last 1,000 entries, capped in memory).
+### `OTP_Registration_Backend.gs`
+Self-contained: own Google Sheet, own OTP generation/expiry (10 min TTL), own HMAC-based encryption for client-side UX. Called **directly by the User Dashboard**, never by the backend. `action=register` / `action=verify` / `action=resend`.
 
-### `GET /device/registered`
-Lists all registered device IDs (auth required if enabled).
+### `Emergency_Session_Backend.gs`
+Called **by the backend**, server-to-server, the instant an emergency starts. Generates a 6-character responder token, emails the fixed `RESPONDER_EMAILS` list *and* every address passed in `contactEmails` (the triggering user's emergency contacts), and exposes `action=validate` / `action=resolve` for the Responder Dashboard.
 
-### `WebSocket /ws/live`
-Connect to receive all device broadcasts in real time. If auth is enabled, append `?token=<api_key>`.
+> **Before this works in production:** update `RESPONDER_EMAILS` in the deployed script to real addresses, and make sure `DASHBOARD_BASE_URL` points at your actual responder dashboard URL.
 
-**Broadcast payload:**
-```json
-{
-  "device_id": "SIM_DEVICE_01",
-  "latitude": 28.6139,
-  "longitude": 77.2090,
-  "speed": 1.2,
-  "context": "walking",
-  "battery": 85,
-  "emergency": false,
-  "risk": "normal",
-  "timestamp": 1700000000,
-  "alert": false,
-  "escalation": null,
-  "reset": false
-}
-```
+---
+
+## Environment Variables
+
+See `backend/env.example` for the authoritative, commented list. Summary:
+
+| Variable | Required for | Notes |
+|---|---|---|
+| `API_KEY` | Optional auth | Blank = auth disabled (dev mode) |
+| `CORS_ORIGINS` | All dashboards | Comma-separated, no trailing slash |
+| `DATABASE_URL` | User/Responder Dashboards | Neon connection string; blank = Postgres features disabled |
+| `SESSION_TOKEN_WEBAPP_URL` | Responder alerts | The Emergency Session Token Apps Script's `/exec` URL |
+
+The OTP Apps Script URL is **not** a backend env var — it's configured client-side in `frontend/user_dashboard/otp-frontend.js` (`RESQNET_WEB_APP_URL`), since the backend is never part of that exchange.
 
 ---
 
 ## Security
 
-Authentication is **optional and off by default** — the system works immediately with zero configuration.
+Authentication is **optional and off by default**.
 
-### Enabling auth
-
-1. Copy `backend/.env.example` to `backend/.env`
+1. Copy `backend/env.example` to `backend/.env`
 2. Generate a key: `python -c "import secrets; print(secrets.token_hex(32))"`
-3. Set `API_KEY=<generated key>` in `.env`
-4. Restart the backend — it prints a startup banner confirming auth is enabled
+3. Set `API_KEY=<key>` and restart — the startup banner confirms it's enabled
 
-Once enabled:
-- All HTTP endpoints require an `X-API-Key` header → `403` if missing/wrong
-- WebSocket connections require `?token=<key>` in the URL → closed with code `4403` if invalid
-- The Python simulator auto-loads `backend/.env`, so it picks up the key automatically — or pass `--key` explicitly
-- The dashboard shows a 🔑 API Key input — enter the same key and click Apply to reconnect
+Once enabled: all HTTP endpoints require `X-API-Key`, WebSocket connections require `?token=<key>`, and the simulator/dashboards pick it up automatically from `.env` or a `--key` flag / UI field.
 
-### Other protections
-- Rate limiting via `slowapi`: 60 req/min on `/device/update`, 30 req/min on `/device/history`
-- Device registration required — `/device/update` rejects any `device_id` that hasn't called `/device/register` first
-- Pydantic field validation rejects out-of-range coordinates, negative speed, invalid battery before they touch state
+The one deliberate exception is `POST /user/incidents/resolve-by-token` — the Responder Dashboard has no login, so the (already Apps-Script-validated) token itself is the credential there, same pattern as the Apps Script endpoints.
+
+Other protections: rate limiting via `slowapi` (60/min on `/device/update`, 30/min on `/device/history`), mandatory device registration before `/device/update` accepts anything, Pydantic field validation on every request body, passwords hashed with PBKDF2-HMAC-SHA256 (200,000 iterations, per-user salt) as a stopgap until Firebase owns login.
+
+---
+
+## Simulator
+
+```bash
+python simulator/simulator.py                          # interactive
+python simulator/simulator.py --demo                    # scripted demo, no keypresses
+python simulator/simulator.py --id DEVICE_02 --key <k>   # custom device / auth
+python simulator/seed_simulator_user.py --url <base> --key <k>   # create a demo account + device
+```
+
+Interactive keys: `p` panic · `r` reset · `0`–`3` mode · `t` sharp turn · `q` quit.
 
 ---
 
 ## Design Principles
 
-- **Backend is the single source of truth** — frontend reflects latest state, never manages its own
-- **Emergency is latched** — cannot be silently cancelled by attacker or network glitch
-- **Reset is explicit** — only a deliberate `reset: true` payload clears emergency state
-- **Escalation is time-driven, not polling** — elapsed time from panic start, advanced in one pass
-- **History is bounded** — deque with maxlen=1000 prevents silent RAM exhaustion
-- **Validation at the boundary** — Pydantic Field constraints reject invalid payloads before they touch state
-- **Dead clients are cleaned up** — failed WebSocket sends are caught and the connection removed
-- **Auth is additive, not required** — the system is fully usable with zero config, and becomes secure the moment a key is configured
-- **The dashboard doesn't care where a device comes from** — browser simulator, Python simulator, or real hardware all look identical once they reach the backend
+- **Backend is the single source of truth** — every dashboard reflects backend state, never manages its own.
+- **Emergency is latched** — cannot be silently cancelled; only an explicit `reset: true` clears it.
+- **Ownership lives in a relation table**, not a foreign key on `devices` — keeps the schema honest about the fact that device ownership is a *fact about a relationship*, not a property of the device itself.
+- **Two independent systems close an incident** — the Apps Script Sheet and the Postgres `incidents` row don't share a database, so both close paths are called explicitly rather than assumed to stay in sync.
+- **Auth is additive, not required** — the system is fully usable with zero config, and becomes secure the moment a key is configured.
+- **The dashboard doesn't care where a device comes from** — Trial Dashboard, Python simulator, or real hardware all look identical once they reach the backend.
 
 ---
 
@@ -383,87 +338,33 @@ Once enabled:
 
 | Area | Status |
 |---|---|
-| Backend core | ✅ Stable |
+| Backend core (context, risk, escalation) | ✅ Stable |
 | WebSocket broadcast | ✅ Working |
-| Risk + escalation logic | ✅ Fixed and verified |
-| Optional API key auth | ✅ Working (HTTP + WS) |
-| Rate limiting | ✅ Working |
-| Device registration | ✅ Working |
-| In-browser simulator | ✅ Working — multi-device, sidebar UI |
-| Python simulator (interactive + demo) | ✅ Working |
-| Both simulators running simultaneously | ✅ Working |
-| Dashboard (sidebar + map layout) | ✅ Working |
-| External CSS file | ✅ Done |
-| Movement trail | ✅ Working (emergency-only, colour-coded) |
-| Dark mode | ✅ Working (default) |
-| Docker | ❌ Removed — not needed for this project |
-| Persistent storage | ❌ Not yet (in-memory only) |
-| Notifications (SMS/email) | ❌ Not yet |
-| Hardware device | ❌ Not yet |
+| Optional API key auth + rate limiting | ✅ Working |
+| Trial Dashboard (in-browser sim + map) | ✅ Working, unchanged |
+| User Dashboard (register/login/devices/contacts/incidents) | ✅ Wired end-to-end |
+| Responder Dashboard (magic link → live map) | ✅ Wired end-to-end |
+| Postgres schema (4 core tables + supporting) | ✅ Implemented |
+| OTP registration Apps Script | ✅ Working, versioned in `apps_script/` |
+| Emergency session-token Apps Script + contact alerts | ✅ Working, versioned in `apps_script/` |
+| Simulator demo account (`seed_simulator_user.py`) | ✅ Working |
+| Voice monitoring | 🚧 Placeholder UI only — not wired to any mic |
+| Email queue (Phase 4) | 🚧 Schema + polling contract exist, nothing enqueues into it yet |
+| Persistent live state (device_state/history) | ❌ Still in-memory, resets on backend restart |
+| Automated tests / CI | ❌ Not yet |
 
 ---
 
-## Planned Improvements
+## Known Gaps / Next Steps
 
-### Backend
-- Replace remaining `print()` calls with Python `logging` module (levels, timestamps, file output)
-- API versioning — prefix all routes with `/api/v1/`
-- Persistent storage (SQLite → PostgreSQL) so history survives restarts
-- Configurable escalation thresholds via `.env`
-
-### Notifications
-- Email alerts via SMTP / SendGrid on emergency trigger
-- SMS alerts via Twilio for trusted contacts
-- WhatsApp alerts via Twilio WhatsApp API (high reach in India)
-- Push notifications via Firebase Cloud Messaging (FCM)
-
-### Dashboard 1 — User Account Dashboard
-Personal dashboard for the device owner:
-- Phone OTP authentication
-- Manage registered devices (name, battery, last seen, connection status)
-- Edit emergency contacts with priority order and per-contact notification method
-- Notification preferences and quiet hours
-- Full incident history with timeline replay
-- Progressive Web App (PWA) for home screen install and offline contacts
-
-### Dashboard 2 — Emergency Responder Dashboard
-For trusted contacts receiving the alert:
-- One-time session token sent via SMS/Mail on emergency trigger (no password needed in a crisis)
-- Live map with movement trail and speed context
-- "I'm on my way" acknowledgement button
-- Live audio stream from device microphone (with user consent)
-- Multi-responder view (see who else is watching)
-- Session auto-expires after reset + 30 minutes
-
-### Dashboard 3 — Operations Command Center
-For organisations (universities, NGOs) monitoring many devices:
-- Real-time map of all registered devices, colour-coded by status
-- Active incidents panel with responder assignment
-- Geofence zones with auto-routing of incidents to zone responders
-- Regional statistics and average response time
-- Incident log with CSV export
-
-### Dashboard 4 — Org Admin Panel
-For organisation administrators:
-- User and device management
-- Responder roster and shift management
-- Alert delivery audit log (did the SMS actually deliver?)
-- Customisable escalation thresholds per organisation
-- Monthly incident reports
-
-### Testing & CI
-- Unit tests for `context.py` (escalation, risk, classification logic)
-- Integration tests for the full `/device/update` cycle
-- GitHub Actions CI on push
-- `ruff` + `black` + pre-commit hook
-
-### Hardware (Future)
-- **ESP32** microcontroller with **NEO-M8N GPS module**
-- Physical panic button on GPIO with debounce
-- **MQTT** communication to backend (more reliable than HTTP on flaky connections)
-- LiPo battery with TP4056 charger, INMP441 I2S microphone
-- OTA (over-the-air) firmware updates
-- Target form factor: < 40g, wrist-wear or clip-on
+- Replace remaining `print()` calls with `logging`
+- Unit tests for `context.py` (risk scoring / escalation) — highest value, lowest effort, given this logic has already had one real bug
+- GitHub Actions CI
+- API versioning (`/api/v1/`)
+- SMS notifications (Twilio or Fast2SMS) alongside email
+- RBAC design before building any Operations/Admin dashboard
+- Persistent storage for `device_state`/`device_history` (currently wiped on every backend restart)
+- Real device-mic streaming behind the Voice Monitoring placeholder, with explicit per-device consent
 
 ---
 

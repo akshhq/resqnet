@@ -16,9 +16,15 @@
 // the backend, resolve incidents promptly (which kills the link), and
 // avoid forwarding these emails/links outside your responder group.
 
-const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxKCrT4zueJWbdPSpSPAnkCOaz1beC0l_zz_Gs62FqMX3mjYTyFns6yeg_x6zrBj0kIgQ/exec";
+const WEB_APP_URL = window.RESQNET_SESSION_TOKEN_URL || "https://script.google.com/macros/s/AKfycbxKCrT4zueJWbdPSpSPAnkCOaz1beC0l_zz_Gs62FqMX3mjYTyFns6yeg_x6zrBj0kIgQ/exec";
 
-// ── Runs on page load ───────────────────────────────────────────────
+// ── Called from script.js's checkUrlParams() when ?uid=&token= are present ──
+// Validates the magic link against the Apps Script and returns the result
+// ({ success, incident } or { success:false, error }) so script.js can hand
+// incident.deviceId into loadDevice() and drive the live map/WS feed from
+// there. Only renders an error state into #incident-root (if present) on
+// failure — on success it does NOT render its own UI, since script.js's
+// existing dashboard takes over completely.
 async function initIncidentPage() {
   const params = new URLSearchParams(window.location.search);
   const userId = params.get("uid");
@@ -26,10 +32,8 @@ async function initIncidentPage() {
 
   if (!userId || !token) {
     renderError("This link is missing required parameters.");
-    return;
+    return { success: false, error: "Missing uid/token" };
   }
-
-  renderLoading();
 
   try {
     const res = await fetch(WEB_APP_URL, {
@@ -41,12 +45,13 @@ async function initIncidentPage() {
 
     if (!data.success) {
       renderError(data.error || "This session link is no longer valid.");
-      return;
+      return data;
     }
 
-    renderIncident(data.incident, { userId, token });
+    return data; // { success: true, incident: { deviceId, name, ... } }
   } catch (err) {
     renderError("Could not reach the emergency backend. Check your connection and retry.");
+    return { success: false, error: "Network error" };
   }
 }
 
@@ -65,16 +70,28 @@ async function resolveIncident(userId, token, resolvedBy) {
 // ═══════════════════════════════════════════════════════════════════
 
 function renderLoading() {
-  document.getElementById("incident-root").innerHTML = `<p>Loading incident…</p>`;
+  const root = document.getElementById("incident-root");
+  if (root) root.innerHTML = `<p>Loading incident…</p>`;
+  else if (typeof showToast === "function") showToast("Loading incident…");
 }
 
 function renderError(message) {
-  document.getElementById("incident-root").innerHTML = `
-    <div class="incident-error">
-      <h2>Unable to open incident</h2>
-      <p>${escapeHtml(message)}</p>
-    </div>
-  `;
+  // #incident-root only exists in a standalone demo page. In the real
+  // dashboard (index.html + script.js) it doesn't, so fall back to the
+  // toast + empty-state that's already part of that page.
+  const root = document.getElementById("incident-root");
+  if (root) {
+    root.innerHTML = `
+      <div class="incident-error">
+        <h2>Unable to open incident</h2>
+        <p>${escapeHtml(message)}</p>
+      </div>
+    `;
+    return;
+  }
+  if (typeof showToast === "function") showToast(message);
+  const emptyState = document.getElementById("empty-state");
+  if (emptyState) emptyState.hidden = false;
 }
 
 function renderIncident(incident, { userId, token }) {

@@ -52,8 +52,12 @@ class UserRegister(BaseModel):
 
     @field_validator("dob")
     @classmethod
-    def dob_not_future(cls, v: date) -> date:
-        if v >= date.today():
+    def dob_not_future(cls, v: str) -> str:
+        try:
+            parsed = date.fromisoformat(v)
+        except ValueError:
+            raise ValueError("dob must be in YYYY-MM-DD format")
+        if parsed >= date.today():
             raise ValueError("Date of birth must be in the past")
         return v
 
@@ -72,24 +76,25 @@ class EmailQueueMarkFailed(BaseModel):
 
 
 class EmergencyContactIn(BaseModel):
+    """Email-first emergency contact — phone is optional."""
     name:     str = Field(..., min_length=1, max_length=100)
-    phone:    str = Field(..., min_length=8, max_length=16)
-    email:    Optional[EmailStr] = None
+    email:    EmailStr
+    phone:    Optional[str] = Field(None, min_length=8, max_length=16)
     priority: int = Field(..., ge=1, le=3)
-    notify_sms:      bool = True
-    notify_whatsapp: bool = True
     notify_email:    bool = True
+    notify_sms:      bool = False
+    notify_whatsapp: bool = False
 
 
 class EmergencyContactUpdate(BaseModel):
     """All fields optional — only provided fields are updated."""
     name:     Optional[str] = Field(None, min_length=1, max_length=100)
-    phone:    Optional[str] = Field(None, min_length=8, max_length=16)
     email:    Optional[EmailStr] = None
+    phone:    Optional[str] = Field(None, min_length=8, max_length=16)
     priority: Optional[int] = Field(None, ge=1, le=3)
+    notify_email:    Optional[bool] = None
     notify_sms:      Optional[bool] = None
     notify_whatsapp: Optional[bool] = None
-    notify_email:    Optional[bool] = None
 
 
 class DeviceRegisterForUser(BaseModel):
@@ -105,6 +110,3 @@ class PreferencesUpdate(BaseModel):
     quiet_hours_start:      Optional[str] = Field(None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     quiet_hours_end:        Optional[str] = Field(None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     language:               Optional[str] = Field(None, min_length=2, max_length=8)
-
-
-
