@@ -24,15 +24,11 @@ Use this configuration to run and test all dashboards and the backend server on 
 
 ### 2. Configure the Frontend Environment
 1. Navigate to the `frontend/` directory.
-2. Check or create `frontend/.env` (source of truth for configuration) and configure it for local URLs:
+2. Check or create `frontend/.../config.js` (source of truth for configuration) and configure it for local URLs:
    ```env
    BACKEND_URL=http://localhost:8000
    WS_URL=ws://localhost:8000/ws/live
    # Firebase configuration details...
-   ```
-3. Run the generator script to compile and update `config.js` across all dashboard subfolders:
-   ```bash
-   node frontend/generate-config.js
    ```
 
 ### 3. Start the Project
@@ -74,8 +70,8 @@ To seed a test user and run the device simulator:
 
 **For Live System:**
 ```bash
-python simulator/seed_simulator_user.py --url https://resqnet-gti8.onrender.com --uid #
-python simulator/simulator.py --demo --id # --url https://resqnet-gti8.onrender.com/device/update
+python simulator/seed_simulator_user.py --url https://backend_link.com --uid #
+python simulator/simulator.py --demo --id # --url https://backend_link.com/device/update
 ```
 
 **For Local System:**
@@ -93,12 +89,12 @@ This section details the exact, step-by-step production configuration for ResQNe
 ### 1. Deploy the Google Apps Script (Email Dispatch & Session Manager)
 Before configuring the backend, you must deploy the Google Apps Script Web App so that you have its endpoint URL:
 
-1. Open **Google Drive** and locate your Google Sheet (ID: `1J3t8UhsigJrw9BKgV6ya6U8hTUVhiSf3anFtoUcg4MA`).
+1. Open **Google Drive** and locate your Google Sheet (ID: `##`).
 2. Go to [script.google.com](https://script.google.com) and open your standalone Apps Script project, or click **Extensions > Apps Script** from inside your Google Sheet.
 3. Paste the contents of `backend/Session Token.gs` into the script editor.
 4. Ensure the spreadsheet ID is defined at the top of the file:
    ```javascript
-   const SHEET_ID = "1J3t8UhsigJrw9BKgV6ya6U8hTUVhiSf3anFtoUcg4MA";
+   const SHEET_ID = "##";
    ```
 5. **Authorize the script to send emails**:
    * Paste this temporary helper function at the bottom of the script:
@@ -121,12 +117,12 @@ Before configuring the backend, you must deploy the Google Apps Script Web App s
 ---
 
 ### 2. Configure and Deploy the Backend on Render
-1. Open your **Render Dashboard** and select your active web service (`resqnet-gti8`).
+1. Open your **Render Dashboard** and select your active web service.
 2. Navigate to the **Environment** tab.
 3. Set the following environment variables:
-   * `DATABASE_URL`: `postgresql://neondb_owner:npg_scheIRW70pzU@ep-twilight-feather-aoafhlvv-pooler.c-2.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require`
-   * `SESSION_TOKEN_WEBAPP_URL`: `https://script.google.com/macros/s/AKfycbxGwq38-jfQ4OOnO-5CvOO2k_1jTMhq0hGCPsU7AiWLkA0EFMIPLRSIVBIRbXxHawop/exec`
-   * `CORS_ORIGINS`: `https://aksh.is-a.dev,http://localhost:5500,http://localhost:5501,http://localhost:5502`
+   * `DATABASE_URL`: `#Used Neon PostGRE Database#`
+   * `SESSION_TOKEN_WEBAPP_URL`: `Google Apps Script Web-App URL`
+   * `CORS_ORIGINS`: `Your domain, http://localhost:5500, http://localhost:5501, http://localhost:5502`
    * `API_KEY`: *(Optional: Set a hexadecimal security key if you want to enable authentication on the IoT endpoints)*
 4. Save the changes. Render will automatically initiate a new deploy.
 5. Confirm the deployment finishes and the logs display `Postgres : ENABLED` and `CORS origins allowed`.
@@ -134,25 +130,21 @@ Before configuring the backend, you must deploy the Google Apps Script Web App s
 ---
 
 ### 3. Compile and Deploy the Frontends (GitHub Pages)
-Your static frontends (User Dashboard, Responder Dashboard, Trial Dashboard) are hosted on your custom domain `https://aksh.is-a.dev/resqnet`.
+Your static frontends (User Dashboard, Responder Dashboard, Trial Dashboard) are hosted on your custom domain.
 
 1. Open your local project directory.
-2. Open `frontend/.env` and update the parameters to point to the live Render backend:
+2. Open `frontend/.../config.js` and update the parameters to point to the live Render backend and database:
    ```env
-   BACKEND_URL=https://resqnet-gti8.onrender.com
-   WS_URL=wss://resqnet-gti8.onrender.com/ws/live
+   BACKEND_URL=https://backend_link.com
+   WS_URL=wss://backend_link.com/ws/live
    ```
-3. Run the generator script to compile and push the live URLs into `config.js` across all frontend subfolders:
-   ```bash
-   node frontend/generate-config.js
-   ```
-4. Commit the changes and push them to your GitHub repository:
+3. Commit the changes and push them to your GitHub repository:
    ```bash
    git add .
    git commit -m "Configure frontend build to use live Render URLs"
    git push origin main
    ```
-5. Once your static host rebuilds (about 30-60 seconds), your live portals at `https://aksh.is-a.dev` will be fully synchronized with the live Render backend.
+5. Once your static host rebuilds (about 30-60 seconds), your live portals at `Your Domain` will be fully synchronized with the live Render backend.
 
 ---
 
@@ -162,18 +154,18 @@ To verify the entire live environment, use the Python simulator to register a us
 1. **Seed a new User Profile & Device**:
    Replace `#` with your custom Firebase User UID (e.g., `3fIPL5Y3MQTMf4q857zub1GgfN62`) to create a profile and default device registered to them in the live Neon Postgres database:
    ```bash
-   python simulator/seed_simulator_user.py --url https://resqnet-gti8.onrender.com --uid 3fIPL5Y3MQTMf4q857zub1GgfN62
+   python simulator/seed_simulator_user.py --url https://backend_link.com --uid 3fIPL5Y3vMQTMf4q85G7zub1GgfN62
    ```
-   *This outputs your newly registered simulator Device ID (e.g., `3fIPL5Y3MQTMf4q857zub1GgfN62_89172`).*
+   *This outputs your newly registered simulator Device ID (e.g., `3fIPL5Y3vMQTMf4q85G7zub1GgfN62_89172`).*
 
 2. **Launch the Live Simulator**:
    Run the realistic GPS tracker using the returned Device ID:
    ```bash
-   python simulator/simulator.py --demo --id 3fIPL5Y3MQTMf4q857zub1GgfN62_89172 --url https://resqnet-gti8.onrender.com/device/update
+   python simulator/simulator.py --demo --id 3fIPL5Y3vMQTMf4q85G7zub1GgfN62_89172 --url https://backend_link.com/device/update
    ```
 3. **Verify Alert Dispatch**:
    * The simulator will automatically trigger a panic signal at the 10-second mark.
    * Verify a new row is appended to your Google Sheet (`EmergencySessions`).
-   * Open your email (`kumaraksh1107@gmail.com`) and verify you received the tracking alert.
-   * Click the tracking link in the email to open the live Responder Dashboard at `https://aksh.is-a.dev` and confirm you see the real-time map trail updating.
+   * Open your email and verify you received the tracking alert.
+   * Click the tracking link in the email to open the live Responder Dashboard at `Your Domain` and confirm you see the real-time map trail updating.
    * Let the simulator run to `110s` to verify that the reset signal successfully resolves the incident on both Google Sheets and Neon Postgres.
