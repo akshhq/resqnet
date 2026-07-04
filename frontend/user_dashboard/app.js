@@ -22,7 +22,7 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 
 
-const BACKEND = (window.RESQNET_CONFIG && window.RESQNET_CONFIG.BACKEND_URL) || "https://resqnet-gti8.onrender.com";
+const BACKEND = RESQNET_CONFIG.BACKEND_URL;
 
 // ── Auth / API key headers (reuses the same optional API key system as Trial_Dashboard) ──
 function _getApiKey() {
