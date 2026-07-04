@@ -103,11 +103,13 @@ resqnet/
 │   │   ├── storage.py              # In-memory live state (device_state, history, registered_devices)
 │   │   └── websocket.py            # ConnectionManager
 │   ├── requirements.txt
-│   ├── env.example                 # Copy to .env — documents every variable
+│   ├── env.example                 # Copy to .env — documents every backend variable
 │   └── .env                        # (gitignored) local secrets
 ├── apps_script/
 │   └── Emergency_Session_Backend.gs     # Responder magic links + emergency-contact alerts
 ├── frontend/
+│   ├── .env                        # Frontend source of truth: Firebase + public backend URLs
+│   ├── generate-config.js          # Builds dashboard config.js files from frontend/.env
 │   ├── user_dashboard/             # Firebase auth / devices / contacts / incidents
 │   │   ├── index.html
 │   │   ├── app.js                  # Firebase Auth + talks to FastAPI /user/*
@@ -144,7 +146,10 @@ resqnet/
 ```bash
 cp backend/env.example backend/.env
 # then fill in DATABASE_URL, SESSION_TOKEN_WEBAPP_URL, and optionally API_KEY
+# also fill in frontend/.env with the Firebase + public URL values
+node frontend/generate-config.js
 ```
+The frontend `.env` file is the source of truth for the dashboard URLs and Firebase settings. `frontend/generate-config.js` reads it and writes the generated `config.js` files used by the dashboards.
 
 ### One-command startup
 ```bash
@@ -159,6 +164,7 @@ cd backend
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 ```bash
+node frontend/generate-config.js   # regenerate dashboard config.js files after any .env change
 cd Trial_Dashboard && python -m http.server 5500      # Trial Dashboard
 cd frontend/user_dashboard && python -m http.server 5501
 cd frontend/responder_dashboard && python -m http.server 5502
@@ -171,6 +177,15 @@ python simulator/seed_simulator_user.py --url https://resqnet-gti8.onrender.com 
 python simulator/simulator.py --demo --id <device_id> --url https://resqnet-gti8.onrender.com/device/update --key <API_KEY>
 ```
 Log into the User Dashboard with `simulator@resqnet.demo` / `SimulatorDemo123!` to watch that account's device, incidents, and contacts update live.
+
+### Run Integration Tests
+To validate the backend API endpoints, user/device registrations, and emergency flow against your database:
+1. Ensure the local backend server is running (`uvicorn app.main:app` on port 8000).
+2. Run the integration test suite:
+   ```bash
+   python scratch/test_user_flow.py
+   ```
+   This script registers a temporary test user, signs up a test device, creates contacts, fires a location update with `emergency=True` to create an incident, and then clears it using `reset=True` to verify the resolution sequence.
 
 ---
 
@@ -341,7 +356,7 @@ Interactive keys: `p` panic · `r` reset · `0`–`3` mode · `t` sharp turn · 
 | Voice monitoring | 🚧 Placeholder UI only — not wired to any mic |
 | Email queue (Phase 4) | 🚧 Schema + polling contract exist, nothing enqueues into it yet |
 | Persistent live state (device_state/history) | ❌ Still in-memory, resets on backend restart |
-| Automated tests / CI | ❌ Not yet |
+| Automated tests / CI | ✅ E2E Integration test suite complete |
 
 ---
 

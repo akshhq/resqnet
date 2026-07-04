@@ -45,7 +45,8 @@ device_id = "<user_id>_<5-digit>"    e.g. "aksh_kumar_9876543210_48213"
 
 import json
 import random
-from datetime import datetime, date
+import string
+from datetime import datetime, date, timezone
 from typing import Optional
 
 import asyncpg
@@ -192,6 +193,16 @@ async def init_user_tables():
             ON email_queue (status, created_at ASC)
         """)
 
+        # Indexes for frequent lookup queries
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_devices_user_id
+            ON devices (user_id)
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_incidents_user_id
+            ON incidents (user_id)
+        """)
+
     print("  User tables : ENABLED  (users, devices, user_devices, "
           "emergency_contacts, preferences, incidents, email_queue)")
 
@@ -209,7 +220,7 @@ async def enqueue_email(to_email: str, to_name: Optional[str],
         )
 
     pool = dbmod._pool
-    now = int(datetime.utcnow().timestamp())
+    now = int(datetime.now(timezone.utc).timestamp())
 
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -251,7 +262,7 @@ async def list_pending_emails(limit: int = 50) -> list[dict]:
 async def mark_email_sent(email_id: int) -> bool:
     from app import db as dbmod
     pool = dbmod._pool
-    now = int(datetime.utcnow().timestamp())
+    now = int(datetime.now(timezone.utc).timestamp())
     async with pool.acquire() as conn:
         result = await conn.execute(
             "UPDATE email_queue SET status = 'sent', sent_at = $2 WHERE id = $1",
@@ -283,7 +294,7 @@ async def create_user(user_id: str, name: str, dob: date, phone: str, email: str
     from app import db as dbmod
     pool = dbmod._pool
 
-    now = int(datetime.utcnow().timestamp())
+    now = int(datetime.now(timezone.utc).timestamp())
     async with pool.acquire() as conn:
         await conn.execute(
             """
@@ -419,7 +430,7 @@ async def register_user_device(user_id: str, friendly_name: str) -> dict:
     from app import db as dbmod
 
     device_id = generate_device_id(user_id)
-    now = int(datetime.utcnow().timestamp())
+    now = int(datetime.now(timezone.utc).timestamp())
 
     pool = dbmod._pool
     async with pool.acquire() as conn:
@@ -555,7 +566,7 @@ async def create_incident(device_id: str, user_id: str, em_id: str, started_at: 
             ON CONFLICT (incident_id) DO NOTHING
             """,
             incident_id, device_id, user_id, em_id, started_at,
-            responder_token, int(datetime.utcnow().timestamp()) if responder_token else None,
+            responder_token, int(datetime.now(timezone.utc).timestamp()) if responder_token else None,
         )
     return incident_id
 

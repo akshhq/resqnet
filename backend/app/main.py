@@ -1,3 +1,4 @@
+import json
 import os
 from collections import deque
 from contextlib import asynccontextmanager
@@ -35,6 +36,7 @@ from app import db
 from app import user_db
 from app.user_routes import router as user_router
 from app.email_queue_routes import router as email_queue_router
+from app.session_proxy_routes import router as session_proxy_router
 
 
 # ---------------------------------------------------------------------------
@@ -66,7 +68,7 @@ async def _trigger_responder_alert(device_id: str, user_id: str, name: str,
     emergency is never blocked on this succeeding.
     """
     if not SESSION_TOKEN_WEBAPP_URL:
-        print("⚠️  SESSION_TOKEN_WEBAPP_URL not set — skipping responder alert email.")
+        print("[WARNING] SESSION_TOKEN_WEBAPP_URL not set — skipping responder alert email.")
         return None
 
     contact_emails: list[str] = []
@@ -74,13 +76,13 @@ async def _trigger_responder_alert(device_id: str, user_id: str, name: str,
         contacts = await user_db.list_emergency_contacts(user_id)
         contact_emails = [c["email"] for c in contacts if c.get("notify_email") and c.get("email")]
     except Exception as e:
-        print(f"⚠️  Could not load emergency contacts for {user_id}: {e}")
+        print(f"[WARNING] Could not load emergency contacts for {user_id}: {e}")
 
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             res = await client.post(
                 SESSION_TOKEN_WEBAPP_URL,
-                content=__import__("json").dumps({
+                content=json.dumps({
                     "action": "trigger",
                     "userID": user_id,
                     "deviceID": device_id,
@@ -93,11 +95,11 @@ async def _trigger_responder_alert(device_id: str, user_id: str, name: str,
             )
             data = res.json()
             if not data.get("success"):
-                print(f"⚠️  Session-token Apps Script returned failure: {data.get('error')}")
+                print(f"[WARNING] Session-token Apps Script returned failure: {data.get('error')}")
                 return None
             return data
     except Exception as e:
-        print(f"⚠️  Failed to reach session-token Apps Script: {e}")
+        print(f"[WARNING] Failed to reach session-token Apps Script: {e}")
         return None
 
 
@@ -167,10 +169,20 @@ print(f"  CORS origins allowed: {ALLOWED_ORIGINS}")
 
 manager = ConnectionManager()
 
+# ---------------------------------------------------------------------------
+# Health check — unauthenticated, used by the frontend dashboards to detect
+# whether the live Render backend is reachable (see frontend config.js).
+# Falls back to a local backend automatically if this doesn't respond.
+# ---------------------------------------------------------------------------
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
 # User Dashboard routes (register/login/contacts/devices/preferences/incidents)
 # and the email-queue polling contract used by the Apps Script sender.
 app.include_router(user_router)
 app.include_router(email_queue_router)
+app.include_router(session_proxy_router)
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +228,7 @@ async def register_device(data: DeviceRegister):
     # per spec: table creation happens at registration, not lazily.
     await db.ensure_device_table(data.device_id)
 
-    print(f"✅ Device registered: {data.device_id}  (total: {len(registered_devices)})")
+    print(f"[OK] Device registered: {data.device_id}  (total: {len(registered_devices)})")
     return {"registered": True, "device_id": data.device_id}
 
 
@@ -270,13 +282,13 @@ async def device_update(request: Request, data: DeviceUpdate):
     )
 
     if escalation:
-        print(f"🚨 ESCALATION | Device: {data.device_id} | Level: {escalation}")
+        print(f"[ESCALATION] Device: {data.device_id} | Level: {escalation}")
 
     alert_triggered = False
     if should_alert(data.device_id, risk, data.timestamp, alert_state):
         alert_state[data.device_id] = data.timestamp
         alert_triggered = True
-        print(f"🚨 ALERT | Device: {data.device_id} | Risk: {risk} | Time: {data.timestamp}")
+        print(f"[ALERT] Device: {data.device_id} | Risk: {risk} | Time: {data.timestamp}")
 
     payload = {
         "device_id":  data.device_id,

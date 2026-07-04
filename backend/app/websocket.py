@@ -31,7 +31,7 @@ class ConnectionManager:
             try:
                 await connection.send_json(message)
             except Exception as e:
-                print(f"⚠️  Broadcast failed for a connection, removing. Reason: {e}")
+                print(f"[WARNING] Broadcast failed for a connection, removing. Reason: {e}")
                 dead.append(connection)
 
         for conn in dead:

@@ -3,8 +3,14 @@
 // Wired to real backend endpoints. Stubs marked clearly with [STUB].
 // ─────────────────────────────────────────────────────────────────────────────
 
-const BACKEND = (window.RESQNET_CONFIG && window.RESQNET_CONFIG.BACKEND_URL) || "https://resqnet-gti8.onrender.com";
-const WS_URL  = (window.RESQNET_CONFIG && window.RESQNET_CONFIG.WS_URL) || "wss://resqnet-gti8.onrender.com/ws/live";
+// Starts pointed at the live backend; resqnetResolveConfig() (config.js)
+// checks reachability and flips these to the local backend automatically
+// if the live one doesn't answer. checkUrlParams() below awaits the
+// resolver before this dashboard's only device-loading path runs, so this
+// is settled correctly before it matters.
+let BACKEND = window.RESQNET_LIVE.BACKEND_URL;
+let WS_URL  = window.RESQNET_LIVE.WS_URL;
+window.resqnetResolveConfig().then((cfg) => { BACKEND = cfg.BACKEND_URL; WS_URL = cfg.WS_URL; });
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 function _getApiKey() {
@@ -280,13 +286,11 @@ function applyPayload(data) {
     // be reused: the Apps Script Sheet row (magic link itself) and the
     // Postgres incidents row (User Dashboard incident history).
     if (activeSessionToken && activeSessionUserId) {
+      // resolveIncident() now hits our own backend's /session-token/resolve,
+      // which resolves the Apps Script link AND closes the Postgres
+      // incidents row in one call (see responder-dashboard-frontend.js).
       resolveIncident(activeSessionUserId, activeSessionToken, "auto: device reset")
-        .catch((err) => console.warn("Apps Script resolve failed:", err));
-      fetch(`${BACKEND}/user/incidents/resolve-by-token`, {
-        method: "POST",
-        headers: _authHeaders(),
-        body: JSON.stringify({ token: activeSessionToken }),
-      }).catch((err) => console.warn("Backend resolve-by-token failed:", err));
+        .catch((err) => console.warn("Incident resolve failed:", err));
     }
   }
 
@@ -656,6 +660,10 @@ let activeSessionToken = null;   // set once a magic link has been validated
 let activeSessionUserId = null;
 
 (async function checkUrlParams() {
+  // Settle live-vs-local before doing anything backend-related — this is
+  // the only path that loads a device in this dashboard.
+  await window.resqnetResolveConfig();
+
   const params = new URLSearchParams(window.location.search);
 
   const uid   = params.get("uid");

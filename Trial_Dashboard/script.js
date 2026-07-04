@@ -3,8 +3,11 @@
 // All simulation runs in the browser. No Python simulator needed.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const BACKEND = (window.RESQNET_CONFIG && window.RESQNET_CONFIG.BACKEND_URL) || "https://resqnet-gti8.onrender.com";
-const WS_URL  = (window.RESQNET_CONFIG && window.RESQNET_CONFIG.WS_URL) || "wss://resqnet-gti8.onrender.com/ws/live";
+// Starts pointed at the live backend; resqnetResolveConfig() (config.js)
+// flips these to the local backend automatically if live is unreachable.
+let BACKEND = window.RESQNET_LIVE.BACKEND_URL;
+let WS_URL  = window.RESQNET_LIVE.WS_URL;
+window.resqnetResolveConfig().then((cfg) => { BACKEND = cfg.BACKEND_URL; WS_URL = cfg.WS_URL; });
 // ── Auth ─────────────────────────────────────────────────────────────────────
 function _getApiKey() {
   return window.RESQNET_API_KEY || sessionStorage.getItem("resqnet_api_key") || "";

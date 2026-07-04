@@ -102,8 +102,8 @@ async def add_contact(user_id: str, data: EmergencyContactIn):
 
     try:
         contact = await user_db.add_emergency_contact(
-            user_id, data.name, data.phone, data.email, data.priority,
-            data.notify_sms, data.notify_whatsapp, data.notify_email,
+            user_id, data.name, data.email, data.phone, data.priority,
+            data.notify_email, data.notify_sms, data.notify_whatsapp,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

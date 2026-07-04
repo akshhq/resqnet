@@ -159,14 +159,14 @@ It is not a finished product. It is proof that the architecture works, and a fou
 
 The prototype establishes the core. The roadmap builds the layers around it:
 
-| Phase | What gets added |
+| Phase | What gets added / Status |
 |---|---|
-| **Notifications** | SMS, email, WhatsApp alerts to trusted contacts on trigger |
-| **User accounts** | Device owners manage their devices, contacts, and incident history |
-| **Responder dashboard** | Time-limited access for contacts during an active emergency |
-| **Command center** | Organisations monitoring hundreds of devices simultaneously |
+| **Notifications** | Email alerts to emergency contacts completed; SMS/WhatsApp planned |
+| **User accounts** | Implemented (Firebase native Auth + Neon Postgres profile store) |
+| **Responder dashboard** | Implemented (Time-limited magic links and live-tracking map) |
+| **Command center** | Planned (Organizations monitoring hundreds of devices) |
 | **Hardware** | ESP32 + GPS module + physical panic button + LiPo battery |
-| **Auth + security** | API keys, JWT, rate limiting, registered device enforcement |
+| **Auth + security** | Completed (optional API keys, WS token, rate limiting, device register check) |
 
 ---
 

@@ -16,7 +16,15 @@
 // the backend, resolve incidents promptly (which kills the link), and
 // avoid forwarding these emails/links outside your responder group.
 
-const WEB_APP_URL = (window.RESQNET_CONFIG && window.RESQNET_CONFIG.SESSION_TOKEN_URL) || "https://script.google.com/macros/s/AKfycbxKCrT4zueJWbdPSpSPAnkCOaz1beC0l_zz_Gs62FqMX3mjYTyFns6yeg_x6zrBj0kIgQ/exec";
+// The Apps Script URL lives ONLY in backend/.env (SESSION_TOKEN_WEBAPP_URL);
+// the browser only ever talks to our own backend, which proxies to Apps
+// Script server-side. BACKEND_BASE is read fresh on every call (not cached
+// at parse time) so it always reflects the live/local choice made by
+// resqnetResolveConfig() in config.js — see checkUrlParams() in script.js,
+// which awaits that resolver before this file's functions are called.
+function backendBase() {
+  return (window.RESQNET_CONFIG && window.RESQNET_CONFIG.BACKEND_URL) || "";
+}
 
 // ── Called from script.js's checkUrlParams() when ?uid=&token= are present ──
 // Validates the magic link against the Apps Script and returns the result
@@ -36,10 +44,10 @@ async function initIncidentPage() {
   }
 
   try {
-    const res = await fetch(WEB_APP_URL, {
+    const res = await fetch(`${backendBase()}/session-token/validate`, {
       method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" }, // avoids CORS preflight on Apps Script
-      body: JSON.stringify({ action: "validate", userID: userId, token }),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userID: userId, token }),
     });
     const data = await res.json();
 
@@ -57,10 +65,13 @@ async function initIncidentPage() {
 
 // ── Mark resolved ────────────────────────────────────────────────────
 async function resolveIncident(userId, token, resolvedBy) {
-  const res = await fetch(WEB_APP_URL, {
+  // Single call now: the backend proxy both resolves the Apps Script /
+  // Sheet magic link AND closes the matching Postgres incidents row, so
+  // this replaces the old dual-fetch (Apps Script + resolve-by-token).
+  const res = await fetch(`${backendBase()}/session-token/resolve`, {
     method: "POST",
-    headers: { "Content-Type": "text/plain;charset=utf-8" },
-    body: JSON.stringify({ action: "resolve", userID: userId, token, resolvedBy }),
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ userID: userId, token, resolvedBy }),
   });
   return res.json(); // { success, message } or { success:false, error }
 }
@@ -128,5 +139,6 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
-// Run on load
-window.addEventListener("DOMContentLoaded", initIncidentPage);
+// initIncidentPage() is called from script.js's checkUrlParams() when
+// ?uid=&token= are present — do NOT auto-fire it here on DOMContentLoaded,
+// since that would cause a duplicate validation request / race condition.

@@ -17,13 +17,34 @@ import {
   onAuthStateChanged
 } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-auth.js";
 
-const RESQNET_CONFIG = window.RESQNET_CONFIG || {};
 const firebaseConfig = window.firebaseConfig || {};
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 
+// Resolves to the live Render backend if reachable, otherwise falls back
+// to a local backend automatically (see config.js). Bounded by a short
+// timeout so this never hangs the page.
+const ACTIVE_CONFIG = await window.resqnetResolveConfig();
+const BACKEND = ACTIVE_CONFIG.BACKEND_URL || "";
 
-const BACKEND = RESQNET_CONFIG.BACKEND_URL || "";
+// Legacy service-worker cleanup moved here so the dashboard no longer needs
+// a separate sw.js file. This preserves the current behavior: clear old
+// caches and unregister any prior dashboard service-worker registration.
+async function cleanupLegacyUserDashboardServiceWorker() {
+  if (!("serviceWorker" in navigator) || !("caches" in window)) return;
+
+  try {
+    const cacheNames = await caches.keys();
+    await Promise.all(cacheNames.map((cacheName) => caches.delete(cacheName)));
+
+    const registrations = await navigator.serviceWorker.getRegistrations();
+    await Promise.all(registrations.map((registration) => registration.unregister()));
+  } catch (err) {
+    console.warn("User dashboard service-worker cleanup skipped:", err);
+  }
+}
+
+void cleanupLegacyUserDashboardServiceWorker();
 
 // ── Auth / API key headers (reuses the same optional API key system as Trial_Dashboard) ──
 function _getApiKey() {
@@ -200,12 +221,24 @@ document.getElementById("google-login-btn").addEventListener("click", async () =
     
     // Ensure user profile exists on backend
     try {
+      let phone = result.user.phoneNumber || "";
+      if (!phone) {
+        // Generate a unique dummy phone number based on UID digits/hash
+        let hashStr = "";
+        for (let i = 0; i < result.user.uid.length; i++) {
+          hashStr += result.user.uid.charCodeAt(i).toString();
+        }
+        phone = "+" + hashStr.replace(/[^0-9]/g, "").slice(0, 14);
+        while (phone.length < 11) {
+          phone += "0";
+        }
+      }
       await api("POST", "/user/register", { 
         user_id: result.user.uid,
         name: result.user.displayName || "Google User",
         dob: "2000-01-01", // Placeholder for Google auth
-        phone: result.user.phoneNumber || "",
-        email: result.user.email 
+        phone: phone,
+        email: result.user.email || `${result.user.uid}@google.resqnet.demo`
       });
     } catch(e) { /* Might already exist */ }
   } catch (err) {
@@ -219,9 +252,19 @@ document.getElementById("google-login-btn").addEventListener("click", async () =
 let confirmationResult = null;
 
 // Initialize Recaptcha after DOM load
-window.recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
-  'size': 'invisible'
-});
+// Lazy/safe helper for RecaptchaVerifier
+function getRecaptchaVerifier() {
+  if (!window.recaptchaVerifier) {
+    try {
+      window.recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
+        'size': 'invisible'
+      });
+    } catch (err) {
+      console.warn("Failed to initialize RecaptchaVerifier:", err);
+    }
+  }
+  return window.recaptchaVerifier;
+}
 
 document.getElementById("send-otp-btn").addEventListener("click", async () => {
   const phoneNumber = document.getElementById("login-phone").value.trim();
@@ -231,7 +274,10 @@ document.getElementById("send-otp-btn").addEventListener("click", async () => {
   }
   
   try {
-    const appVerifier = window.recaptchaVerifier;
+    const appVerifier = getRecaptchaVerifier();
+    if (!appVerifier) {
+      throw new Error("reCAPTCHA verifier is not ready. Please try again.");
+    }
     confirmationResult = await signInWithPhoneNumber(auth, phoneNumber, appVerifier);
     document.getElementById("otp-container").classList.remove("hidden");
     showToast("OTP sent!", "success");
@@ -250,12 +296,14 @@ document.getElementById("verify-otp-btn").addEventListener("click", async () => 
     
     // Ensure user profile exists on backend
     try {
+      const phoneVal = result.user.phoneNumber || "";
+      const emailVal = result.user.email || `${result.user.uid}@phone.resqnet.demo`;
       await api("POST", "/user/register", { 
         user_id: result.user.uid,
         name: "Phone User",
         dob: "2000-01-01",
-        phone: result.user.phoneNumber || "",
-        email: "" 
+        phone: phoneVal,
+        email: emailVal
       });
     } catch(e) { /* Might already exist */ }
   } catch (err) {
@@ -409,7 +457,7 @@ async function loadContacts() {
 
 function renderContactsSummary(contacts) {
   const el = document.getElementById("contacts-summary");
-  if (!currentView === "home") return;
+  if (currentView !== "home") return;
   if (!contacts.length) {
     el.innerHTML = `<div class="empty-state" style="padding:14px;">No emergency contacts added yet.</div>`;
     return;
